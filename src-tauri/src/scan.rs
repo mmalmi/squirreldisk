@@ -3,8 +3,9 @@ use std::ops::Not;
 
 use regex::{Captures, Regex};
 
-use tauri::api::process::{Command as TauriCommand, CommandEvent};
-use tauri::Manager;
+use tauri::Emitter;
+use tauri_plugin_shell::process::CommandEvent;
+use tauri_plugin_shell::ShellExt;
 
 use crate::MyState;
 
@@ -48,12 +49,15 @@ pub fn start(
         paths_to_scan.push(path);
     }
 
-    let (mut rx, child) = TauriCommand::new_sidecar("pdu")
-        .expect("failed to create `my-sidecar` binary command")
+    let pdu_command = app_handle
+        .shell()
+        .sidecar("pdu")
+        .expect("failed to create `pdu` sidecar command");
+    let (mut rx, child) = pdu_command
         .args(paths_to_scan)
         .spawn()
         .expect("Failed to spawn sidecar");
-    
+
     *state.0.lock().unwrap() = Some(child);
 
     // unlisten to the event using the `id` returned on the `listen_global` function
@@ -65,14 +69,15 @@ pub fn start(
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stdout(line) => {
-                    println!("[scan] stdout received: {} bytes", line.len());
-                    let emit_result = app_handle.emit_all("scan_completed", line);
-                    println!("[scan] emit_all scan_completed result: {:?}", emit_result);
+                    //println!("Stdout:{}", &line);
+                    let string = String::from_utf8(line).unwrap();
+                    app_handle.emit("scan_completed", string).ok();
                 }
                 CommandEvent::Stderr(msg) => {
                     // println!("Stderr:{}", &msg);
 
-                    let caps = re.captures(&msg);
+                    let string = String::from_utf8(msg).unwrap();
+                    let caps = re.captures(&string);
                     if let Some(groups) = caps {
                         if groups.len() > 2 {
                             emit_scan_status(&app_handle, groups)
@@ -203,7 +208,7 @@ pub fn stop(state: tauri::State<'_, MyState>) {
 
 fn emit_scan_status(app_handle: &tauri::AppHandle, groups: Captures) {
     app_handle
-        .emit_all(
+        .emit(
             "scan_status",
             Payload {
                 items: groups
