@@ -1,7 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import prettyBytes from "pretty-bytes";
-import { getIconForFolder } from "vscode-icons-js";
-// import { iconImages } from "./iconImages";
 import { buildFullPath } from "../pruneData";
 interface ParentFolderProps {
   focusedDirectory: D3HierarchyDiskItem;
@@ -25,26 +22,21 @@ export const ParentFolder = ({
         /*window.electron.diskUtils.openPath(buildFullPath(focusedDirectory));*/
       }}
     >
-      <div className="">
-        {/* {focusedDirectory && (
-          <img
-            src={
-              iconImages[getIconForFolder(focusedDirectory.data.name)].default
-            }
-            className="h-6 w-6 mr-3"
-          ></img>
-        )} */}
-      </div>
       <div className="truncate pr-6 flex-1 text-xs">
         {focusedDirectory &&
           buildFullPath(focusedDirectory)
             .replace("\\/", "/")
             .replace("\\", "/")}
       </div>
-      <div className="text-xs">
-        {focusedDirectory &&
-          (focusedDirectory.data.value! / mul / mul / mul).toFixed(2)}{" "}
-        GB
+      <div className="shrink-0 text-right text-xs">
+        <div className="text-[10px] uppercase tracking-wide text-gray-500">
+          Allocated
+        </div>
+        <div>
+          {focusedDirectory &&
+            (focusedDirectory.data.value! / mul / mul / mul).toFixed(2)}{" "}
+          GB
+        </div>
       </div>
     </div>
   );

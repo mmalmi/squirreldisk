@@ -56,9 +56,12 @@ const formatNodePath = (node: D3HierarchyDiskItem) => {
 };
 
 const titleText = (node: D3HierarchyDiskItem, mul: number) =>
-  `${formatNodePath(node)}\n${((node.data.size || 0) / mul / mul / mul).toFixed(
-    2
-  )} GB`;
+  `${formatNodePath(node)}\nAllocated ${(
+    (node.data.size || 0) /
+    mul /
+    mul /
+    mul
+  ).toFixed(2)} GB`;
 
 const baseArcOpacity = (
   node: D3HierarchyDiskItem,

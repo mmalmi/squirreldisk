@@ -5,7 +5,8 @@ import { useNavigate } from "react-router-dom";
 
 import diskIcon from "../assets/harddisk.png";
 import removableDriver from "../assets/removable-drive.png";
-import { clearCachedScan } from "../scanCache";
+import { clearCachedScan, type ScanSnapshotSummary } from "../scanCache";
+import { formatScannedAt } from "../scanTime";
 
 type MenuAction = {
   label: string;
@@ -14,7 +15,19 @@ type MenuAction = {
   destructive?: boolean;
 };
 
-const DiskItem = ({ disk, hasScan, onCacheChange }: any) => {
+interface DiskItemProps {
+  disk: any;
+  hasScan: boolean;
+  scanSnapshot?: ScanSnapshotSummary;
+  onCacheChange?: () => void;
+}
+
+const DiskItem = ({
+  disk,
+  hasScan,
+  scanSnapshot,
+  onCacheChange,
+}: DiskItemProps) => {
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -50,6 +63,7 @@ const DiskItem = ({ disk, hasScan, onCacheChange }: any) => {
 
   const icona = disk.isRemovable ? removableDriver : diskIcon;
   const mul = window.OS_TYPE === "windows" ? 1024 : 1000;
+  const scannedAtText = formatScannedAt(scanSnapshot?.scannedAt);
 
   const openDisk = (forceScan = false) => {
     setMenuOpen(false);
@@ -129,6 +143,11 @@ const DiskItem = ({ disk, hasScan, onCacheChange }: any) => {
             <span className=" text-sm font-medium mr-2 px-2.5 py-0.5 rounded bg-gray-700 text-gray-300">
               {(disk.totalSpace / mul / mul / mul).toFixed(1)} GB
             </span>
+            {scannedAtText && (
+              <span className="mt-1 block text-xs font-normal text-gray-400">
+                {scannedAtText}
+              </span>
+            )}
             {/* <span className="opacity-60"></span> */}
           </span>
           <div className="text-sm font-medium text-right text-white">

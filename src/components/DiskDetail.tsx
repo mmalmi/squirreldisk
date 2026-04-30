@@ -5,9 +5,6 @@ import { getChart } from "../d3chart";
 import * as d3 from "d3";
 import prettyBytes from "pretty-bytes";
 import {
-  buildPath,
-  getViewNode,
-  getViewNodeGraph,
   buildFullPath,
   diskItemToD3Hierarchy,
   addRestrictedPathsToTree,
@@ -18,10 +15,10 @@ import { FileLine } from "./FileLine";
 import { ParentFolder } from "./ParentFolder";
 import { DragDropContext, Droppable } from "react-beautiful-dnd";
 import { invoke } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
-import { remove } from "@tauri-apps/plugin-fs";
+import { listen } from "@tauri-apps/api/event";
 import { getChartColor } from "../chartColors";
 import { getCachedScan, setCachedScan } from "../scanCache";
+import { formatScannedAt } from "../scanTime";
 
 (window as any).LockDNDEdgeScrolling = () => true;
 
@@ -30,6 +27,67 @@ interface ScanStatus {
   total: number;
   errors: number;
 }
+
+interface DeleteFailure {
+  id: string;
+  name: string;
+  path: string;
+  message: string;
+}
+
+interface DeleteState {
+  isDeleting: boolean;
+  total: number;
+  current: number;
+  movedBytes: number;
+  failures: Array<DeleteFailure>;
+}
+
+const emptyDeleteState: DeleteState = {
+  isDeleting: false,
+  total: 0,
+  current: 0,
+  movedBytes: 0,
+  failures: [],
+};
+
+const normalizeNodePath = (node: D3HierarchyDiskItem) =>
+  buildFullPath(node).replace(/\\/g, "/");
+
+const removeNodesFromTree = (
+  node: DiskItem,
+  idsToRemove: Set<string>
+): { node: DiskItem | null; removedBytes: number } => {
+  if (idsToRemove.has(node.id)) {
+    return { node: null, removedBytes: node.size || 0 };
+  }
+
+  if (!node.children || node.children.length === 0) {
+    return { node: { ...node }, removedBytes: 0 };
+  }
+
+  const results = node.children.map((child) =>
+    removeNodesFromTree(child, idsToRemove)
+  );
+  const children = results
+    .map((result) => result.node)
+    .filter(Boolean) as Array<DiskItem>;
+  const removedBytes = results.reduce(
+    (sum, result) => sum + result.removedBytes,
+    0
+  );
+  const size = Math.max((node.size || 0) - removedBytes, 0);
+
+  return {
+    node: {
+      ...node,
+      children,
+      size,
+      value: size,
+    },
+    removedBytes,
+  };
+};
 
 const formatElapsed = (seconds: number) => {
   const minutes = Math.floor(seconds / 60);
@@ -74,25 +132,26 @@ const Scanning = () => {
   // Hovered Item
   const [hoveredItem, setHoveredItem] = useState<DiskItem | null>(null);
 
-  const worker = useRef<Worker | null>(null);
   const d3Chart = useRef(null) as any;
   const [view, setView] = useState("loading");
-  const [bytesProcessed, setByteProcessed] = useState(0);
   const [status, setStatus] = useState<ScanStatus>();
   const [restrictedPaths, setRestrictedPaths] = useState<Array<RestrictedPath>>(
     []
   );
   const restrictedPathsRef = useRef<Array<RestrictedPath>>([]);
   const scanStartedAt = useRef(performance.now());
+  const scannedAtRef = useRef<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [deleteState, setDeleteState] = useState({
-    isDeleting: false,
-    total: 0,
-    current: 0,
-  });
+  const [scannedAt, setScannedAt] = useState<number | null>(null);
+  const [deleteState, setDeleteState] =
+    useState<DeleteState>(emptyDeleteState);
 
   const [deleteList, setDeleteList] = useState<Array<D3HierarchyDiskItem>>([]);
   const deleteMap = useRef<Map<string, boolean>>(new Map());
+  const updateScannedAt = (value: number | null) => {
+    scannedAtRef.current = value;
+    setScannedAt(value);
+  };
   const hoverListItem = (item: D3HierarchyDiskItem) => {
     setHoveredItem({ ...item.data });
     d3Chart.current?.setHoveredNode(item);
@@ -137,6 +196,7 @@ const Scanning = () => {
       if (cached) {
         restrictedPathsRef.current = cached.restrictedPaths || [];
         setRestrictedPaths(cached.restrictedPaths || []);
+        updateScannedAt(cached.scannedAt || null);
         baseData.current = cached.tree;
         baseDataD3Hierarchy.current = diskItemToD3Hierarchy(cached.tree);
         setView("disk");
@@ -145,6 +205,7 @@ const Scanning = () => {
 
       restrictedPathsRef.current = [];
       setRestrictedPaths([]);
+      updateScannedAt(null);
       scanStartedAt.current = performance.now();
       timer = window.setInterval(() => {
         setElapsedSeconds((performance.now() - scanStartedAt.current) / 1000);
@@ -177,12 +238,15 @@ const Scanning = () => {
               restrictedPathsRef.current
             );
             const mapped = itemMap(treeWithRestrictedPaths);
+            const nextScannedAt = Date.now();
+            updateScannedAt(nextScannedAt);
             setCachedScan({
               path: disk,
               tree: mapped,
               used,
               errors: restrictedPathsRef.current.length,
               restrictedPaths: restrictedPathsRef.current,
+              scannedAt: nextScannedAt,
             }).catch(console.error);
             baseData.current = mapped;
             baseDataD3Hierarchy.current = diskItemToD3Hierarchy(mapped as any);
@@ -203,21 +267,6 @@ const Scanning = () => {
     };
 
     startScan().catch(console.error);
-    // worker.current = new Worker(new URL("./space.worker.js", import.meta.url), {
-    //   type: "module",
-    // });
-    // worker.current.postMessage({ type: "start", path: disk });
-    // worker.current.onmessage = function (e) {
-    //   const msg = e.data;
-    //   if (msg.type == "DONE") {
-    //     baseData.current = msg.data;
-    //     baseDataD3Hierarchy.current = diskItemToD3Hierarchy(msg.data);
-    //     setView("disk");
-    //   }
-    //   if (msg.type == "STATUS") {
-    //     setByteProcessed(msg.data);
-    //   }
-    // };
     return () => {
       cancelled = true;
       if (timer) {
@@ -227,7 +276,6 @@ const Scanning = () => {
       if (scanStarted) {
         invoke("stop_scanning", { path: disk });
       }
-      //   worker.current!.postMessage({ type: "stop" });
     };
   }, [disk, forceScan, used]);
 
@@ -257,13 +305,6 @@ const Scanning = () => {
           setFocusedDirectory(p);
           setPreviewDirectory(null);
           return p;
-          const curNodePath = buildPath(p);
-          const vn = getViewNode(baseData.current!, curNodePath);
-
-          setFocusedDirectory(
-            getViewNodeGraph(baseDataD3Hierarchy.current!, curNodePath),
-          );
-          return vn;
         },
       });
     }
@@ -274,12 +315,106 @@ const Scanning = () => {
       ? Math.min((status.total / expectedTotal) * 100, 99.9)
       : null;
   const scanRate = status ? formatScanRate(status.total, elapsedSeconds) : "0 B/s";
+  const scannedAtText = formatScannedAt(scannedAt);
   const listedDirectory = previewDirectory || focusedDirectory;
+  const selectedDeleteBytes = deleteList.reduce(
+    (sum, node) => sum + (node.data.size || 0),
+    0
+  );
+  const deleteProgressPercent =
+    deleteState.total > 0
+      ? Math.min((deleteState.current / deleteState.total) * 100, 100)
+      : 0;
   const shouldOfferFullDiskAccess =
     window.OS_TYPE === "macos" &&
     ((status?.errors || 0) >= 10 || restrictedPaths.length >= 10);
   const openFullDiskAccessSettings = () => {
     invoke("open_full_disk_access_settings").catch(console.error);
+  };
+  const moveSelectedToTrash = async () => {
+    if (deleteState.isDeleting || deleteList.length === 0) {
+      return;
+    }
+
+    const selected = [...deleteList];
+    const successful: Array<D3HierarchyDiskItem> = [];
+    const failures: Array<DeleteFailure> = [];
+    let movedBytes = 0;
+
+    setDeleteState({
+      ...emptyDeleteState,
+      isDeleting: true,
+      total: selected.length,
+    });
+
+    for (const [index, node] of selected.entries()) {
+      const nodePath = normalizeNodePath(node);
+
+      try {
+        await invoke("move_to_trash", { path: nodePath });
+        successful.push(node);
+        movedBytes += node.data.size || 0;
+      } catch (error) {
+        failures.push({
+          id: node.data.id,
+          name: node.data.name,
+          path: nodePath,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      setDeleteState({
+        isDeleting: true,
+        total: selected.length,
+        current: index + 1,
+        movedBytes,
+        failures: [...failures],
+      });
+    }
+
+    if (successful.length > 0) {
+      const successfulIds = new Set(successful.map((node) => node.data.id));
+      const updatedTree = baseData.current
+        ? removeNodesFromTree(baseData.current, successfulIds).node
+        : null;
+
+      if (updatedTree) {
+        baseData.current = updatedTree;
+        baseDataD3Hierarchy.current = diskItemToD3Hierarchy(updatedTree);
+      }
+
+      d3Chart.current.deleteNodes(successful);
+      clearHoveredItem();
+      setPreviewDirectory(null);
+
+      if (baseData.current) {
+        try {
+          await setCachedScan({
+            path: disk,
+            tree: baseData.current,
+            used: baseData.current.size || Math.max(used - movedBytes, 0),
+            errors: restrictedPathsRef.current.length,
+            restrictedPaths: restrictedPathsRef.current,
+            scannedAt: scannedAtRef.current || undefined,
+          });
+        } catch (error) {
+          console.error(error);
+        }
+      }
+    }
+
+    const failedIds = new Set(failures.map((failure) => failure.id));
+    const survivingItems = selected.filter((node) => failedIds.has(node.data.id));
+    deleteMap.current.clear();
+    survivingItems.forEach((node) => deleteMap.current.set(node.data.id, true));
+    setDeleteList(survivingItems);
+    setDeleteState({
+      isDeleting: false,
+      total: selected.length,
+      current: selected.length,
+      movedBytes,
+      failures,
+    });
   };
   return (
     <>
@@ -315,7 +450,7 @@ const Scanning = () => {
               </div>
               <div className="rounded-md bg-gray-900/70 px-3 py-2">
                 <div className="text-[10px] text-gray-500">
-                  Size
+                  Allocated
                 </div>
                 <div className="mt-1 text-sm font-medium text-white">
                   {prettyBytes(status.total)}
@@ -369,7 +504,9 @@ const Scanning = () => {
         <div className="flex-1 flex">
           <DragDropContext
             onDragEnd={(result) => {
-              console.log(result);
+              if (deleteState.isDeleting) {
+                return;
+              }
               if (result.destination?.droppableId !== "deletelist") {
                 return;
               }
@@ -408,6 +545,11 @@ const Scanning = () => {
                     focusedDirectory={focusedDirectory}
                     d3Chart={d3Chart}
                   ></ParentFolder>
+                )}
+                {scannedAtText && (
+                  <div className="mt-1 mb-2 px-2 text-[11px] text-gray-500">
+                    {scannedAtText}
+                  </div>
                 )}
                 {restrictedPaths.length > 0 && (
                   <div className="mb-2 flex items-center justify-between rounded-md bg-rose-950/30 px-3 py-2 text-xs text-rose-100">
@@ -462,89 +604,78 @@ const Scanning = () => {
                     >
                       <div className="rounded-lg border	border-gray-500	border-dashed p-2 text-gray-500 text-center mb-0">
                         {deleteList.length == 0 && (
-                          <>Drag file and folders here to delete</>
+                          <>Drop files and folders here to move to Trash</>
                         )}
                         {deleteList.length > 0 && (
-                          <div>
-                            <div>
-                              {deleteList.length} files selected -{" "}
-                              <a
-                                href="#"
-                                className="underline underline-offset-2"
+                          <div className="text-left">
+                            <div className="flex items-center justify-between gap-3 text-xs">
+                              <span>
+                                {deleteList.length} selected ·{" "}
+                                {prettyBytes(selectedDeleteBytes)} allocated
+                              </span>
+                              <button
+                                type="button"
+                                className="text-gray-300 underline underline-offset-2 hover:text-white disabled:opacity-40"
+                                disabled={deleteState.isDeleting}
                                 onClick={() => {
                                   setDeleteList([]);
                                   deleteMap.current.clear();
+                                  setDeleteState(emptyDeleteState);
                                 }}
                               >
-                                Clear Selection
-                              </a>
+                                Clear
+                              </button>
                             </div>
                           </div>
                         )}
                         <div>{provided.placeholder}</div>
+                        {deleteState.isDeleting && (
+                          <div className="mt-3">
+                            <div className="mb-1 flex justify-between text-xs text-gray-400">
+                              <span>
+                                Moving {deleteState.current} of{" "}
+                                {deleteState.total}
+                              </span>
+                              <span>{prettyBytes(deleteState.movedBytes)}</span>
+                            </div>
+                            <div className="h-1.5 w-full rounded-full bg-gray-800">
+                              <div
+                                className="h-1.5 rounded-full bg-red-500 transition-[width] duration-200"
+                                style={{ width: `${deleteProgressPercent}%` }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                        {!deleteState.isDeleting &&
+                          deleteState.failures.length > 0 && (
+                            <div className="mt-3 rounded bg-rose-950/30 p-2 text-left text-xs text-rose-100">
+                              <div className="font-semibold">
+                                {deleteState.failures.length} survived
+                              </div>
+                              {deleteState.failures.slice(0, 3).map((failure) => (
+                                <div
+                                  key={failure.id}
+                                  className="mt-1 truncate text-rose-100/80"
+                                  title={`${failure.path}: ${failure.message}`}
+                                >
+                                  {failure.name}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         {deleteList.length > 0 && (
                           <button
-                            onClick={async () => {
-                              setDeleteState({
-                                isDeleting: true,
-                                total: deleteList.length,
-                                current: 0,
-                              });
-                              // Avvio spinner
-                              let successful: Array<D3HierarchyDiskItem> = [];
-                              // Cancello (errori li scarto da eliminare quindi vengono tenuti)
-                              for (let node of deleteList) {
-                                const nodePath = buildFullPath(node)
-                                  .replace("\\/", "/")
-                                  .replace("\\", "/");
-                                try {
-                                  //   await window.electron.diskUtils.rimraf(
-                                  //     nodePath
-                                  //   );
-                                  //   if (
-                                  //     node.children &&
-                                  //     node.children.length > 0
-                                  //   ) {
-                                  // Workaroound: Since sometimes if the tree has some trimmed leafs a folder has no children
-                                  remove(nodePath, {
-                                    recursive: true,
-                                  }).catch((err) =>
-                                    remove(nodePath).catch((err2) =>
-                                      console.error(err, err2),
-                                    ),
-                                  );
-                                  //   } else {
-                                  //     removeFile(nodePath).catch((err) => console.error(err));
-                                  //   }
-                                  successful.push(node);
-                                  setDeleteState((prev) => ({
-                                    ...prev,
-                                    current: prev.current + 1,
-                                  }));
-                                } catch (e) {
-                                  console.error(e);
-                                }
-                              }
-                              // Una volta finito aggiorno il grafico
-                              d3Chart.current.deleteNodes(successful);
-                              setDeleteState((prev) => ({
-                                isDeleting: false,
-                                total: 0,
-                                current: 0,
-                              }));
-                              setDeleteList([]);
-                              deleteMap.current.clear();
-                            }}
+                            onClick={moveSelectedToTrash}
                             type="button"
                             disabled={deleteState.isDeleting}
                             className="text-white w-full mt-3 bg-gradient-to-r from-red-600 via-red-700 to-red-600 hover:bg-gradient-to-br focus:ring-4 focus:ring-red-300 focus:ring-red-800 shadow-sm shadow-red-500/50 shadow-lg shadow-red-800/80 font-medium rounded-lg text-sm px-5 py-2.5 text-center mr-2 mb-2"
                           >
                             {deleteState.isDeleting
-                              ? "Deleting " +
+                              ? "Moving " +
                                 deleteState.current +
                                 " of " +
                                 deleteState.total
-                              : "Delete"}
+                              : "Move to Trash"}
                           </button>
                         )}
                       </div>

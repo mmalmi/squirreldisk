@@ -8,7 +8,11 @@ import { platform } from "@tauri-apps/plugin-os";
 import { open } from "@tauri-apps/plugin-dialog";
 import folderIcon from "../assets/folder.png";
 import { useNavigate } from "react-router-dom";
-import { hasCachedScan, listScanSnapshots } from "../scanCache";
+import {
+  hasCachedScan,
+  listScanSnapshots,
+  type ScanSnapshotSummary,
+} from "../scanCache";
 
 declare global {
   interface Window {
@@ -22,7 +26,9 @@ declare global {
 const DiskList = () => {
   const [disks, setDisks] = useState([]);
   const [appVersion, setAppVersion] = useState("1.0.0");
-  const [snapshotPaths, setSnapshotPaths] = useState<Set<string>>(new Set());
+  const [snapshotByPath, setSnapshotByPath] = useState<
+    Map<string, ScanSnapshotSummary>
+  >(new Map());
   const [, setCacheRevision] = useState(0);
   const navigate = useNavigate();
   const handleCacheChange = () => {
@@ -32,7 +38,9 @@ const DiskList = () => {
   const refreshSnapshotPaths = () => {
     listScanSnapshots()
       .then((snapshots) =>
-        setSnapshotPaths(new Set(snapshots.map((snapshot) => snapshot.path)))
+        setSnapshotByPath(
+          new Map(snapshots.map((snapshot) => [snapshot.path, snapshot]))
+        )
       )
       .catch(console.error);
   };
@@ -85,17 +93,18 @@ const DiskList = () => {
   return (
     <div className="flex-1 flex flex-col">
       <div className="text-white flex-1">
-        {disks.map((disk: any) => (
-          <DiskItem
-            key={disk.sMountPoint}
-            disk={disk}
-            hasScan={
-              hasCachedScan(disk.sMountPoint) ||
-              snapshotPaths.has(disk.sMountPoint)
-            }
-            onCacheChange={handleCacheChange}
-          ></DiskItem>
-        ))}
+        {disks.map((disk: any) => {
+          const snapshot = snapshotByPath.get(disk.sMountPoint);
+          return (
+            <DiskItem
+              key={disk.sMountPoint}
+              disk={disk}
+              hasScan={hasCachedScan(disk.sMountPoint) || !!snapshot}
+              scanSnapshot={snapshot}
+              onCacheChange={handleCacheChange}
+            ></DiskItem>
+          );
+        })}
         <div
           className="text-white p-4 flex gap-4 items-center hover:bg-gray-800 cursor-pointer"
           onClick={() => {

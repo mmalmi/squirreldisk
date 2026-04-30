@@ -15,7 +15,6 @@
     "global-shortcut:default",
     "core:default",
     "notification:default",
-    "fs:allow-remove",
     {
       "identifier": "fs:scope",
       "allow": [
