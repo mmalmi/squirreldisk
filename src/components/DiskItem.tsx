@@ -51,25 +51,23 @@ const DiskItem = ({ disk, hasScan, onCacheChange }: any) => {
   const icona = disk.isRemovable ? removableDriver : diskIcon;
   const mul = window.OS_TYPE === "windows" ? 1024 : 1000;
 
-  const openDisk = (fullscan: boolean) => {
+  const openDisk = (forceScan = false) => {
     setMenuOpen(false);
     navigate("/disk", {
       state: {
         disk: disk.sMountPoint,
         used,
-        fullscan,
+        forceScan,
       },
     });
   };
 
-  const rescan = (fullscan: boolean) => {
-    clearCachedScan(disk.sMountPoint);
-    onCacheChange?.();
-    openDisk(fullscan);
+  const rescan = () => {
+    openDisk(true);
   };
 
-  const forgetScan = () => {
-    clearCachedScan(disk.sMountPoint);
+  const forgetScan = async () => {
+    await clearCachedScan(disk.sMountPoint);
     onCacheChange?.();
     setMenuOpen(false);
   };
@@ -90,9 +88,7 @@ const DiskItem = ({ disk, hasScan, onCacheChange }: any) => {
 
   const actions: MenuAction[] = hasScan
     ? [
-        { label: "View", onSelect: () => openDisk(false) },
-        { label: "Rescan", onSelect: () => rescan(false) },
-        { label: "Full Rescan", onSelect: () => rescan(true) },
+        { label: "Rescan", onSelect: rescan },
         {
           label: "Forget Scan Result",
           onSelect: forgetScan,
@@ -106,12 +102,9 @@ const DiskItem = ({ disk, hasScan, onCacheChange }: any) => {
         },
       ]
     : [
-        { label: "Scan", onSelect: () => openDisk(false) },
-        { label: "Full Scan", onSelect: () => openDisk(true) },
         {
           label: "Show in Finder",
           onSelect: showInFinder,
-          separatorBefore: true,
         },
       ];
 
@@ -119,10 +112,10 @@ const DiskItem = ({ disk, hasScan, onCacheChange }: any) => {
     <div
       onContextMenu={(e) => {
         e.preventDefault();
-        openDisk(true);
+        setMenuOpen(true);
       }}
       onClick={() => {
-        openDisk(false);
+        openDisk();
       }}
       className="text-white p-4 flex gap-4 items-center hover:bg-gray-800 cursor-pointer"
     >
@@ -148,7 +141,7 @@ const DiskItem = ({ disk, hasScan, onCacheChange }: any) => {
               <button
                 type="button"
                 className="rounded-l bg-gray-700 px-3 py-1 hover:bg-gray-600"
-                onClick={() => openDisk(false)}
+                onClick={() => openDisk()}
               >
                 {hasScan ? "View" : "Scan"}
               </button>

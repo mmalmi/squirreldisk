@@ -8,6 +8,15 @@ interface DiskItem {
   size: number;
   isDirectory: boolean;
   children: Array<DiskItem>;
+  restricted?: boolean;
+  restrictedPath?: string;
+  restrictedReason?: string;
+}
+
+interface RestrictedPath {
+  path: string;
+  operation?: string;
+  message?: string;
 }
 
 interface D3HierarchyDiskItemArc {

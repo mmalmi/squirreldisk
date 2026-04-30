@@ -108,6 +108,14 @@ struct Payload {
     errors: u64,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RestrictedPathPayload {
+    path: String,
+    operation: String,
+    message: String,
+}
+
 // Start scan
 pub fn start(
     app_handle: tauri::AppHandle,
@@ -190,7 +198,8 @@ pub fn start(
     // unlisten to the event using the `id` returned on the `listen_global` function
     // an `once_global` API is also exposed on the `App` struct
 
-    let re = Regex::new(r"\(scanned ([0-9]+), total ([0-9]+)(?:, linked [0-9]+, shared [0-9]+)?(?:, erred ([0-9]+))?\)").unwrap();
+    let progress_re = Regex::new(r"\(scanned ([0-9]+), total ([0-9]+)(?:, linked [0-9]+, shared [0-9]+)?(?:, erred ([0-9]+))?\)").unwrap();
+    let error_re = Regex::new(r#"\[error\]\s+([^\s]+)\s+"([^"]+)":\s*(.+)"#).unwrap();
 
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -204,11 +213,22 @@ pub fn start(
                     // println!("Stderr:{}", &msg);
 
                     let string = String::from_utf8(msg).unwrap();
-                    let caps = re.captures(&string);
-                    if let Some(groups) = caps {
+                    for groups in progress_re.captures_iter(&string) {
                         if groups.len() > 2 {
                             emit_scan_status(&app_handle, groups)
                         }
+                    }
+                    for groups in error_re.captures_iter(&string) {
+                        app_handle
+                            .emit(
+                                "scan_restricted_path",
+                                RestrictedPathPayload {
+                                    operation: groups.get(1).map_or("", |m| m.as_str()).to_string(),
+                                    path: groups.get(2).map_or("", |m| m.as_str()).to_string(),
+                                    message: groups.get(3).map_or("", |m| m.as_str()).to_string(),
+                                },
+                            )
+                            .ok();
                     }
                 }
                 CommandEvent::Terminated(t) => {

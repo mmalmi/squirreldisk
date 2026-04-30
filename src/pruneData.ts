@@ -27,6 +27,11 @@ const makeGroupNode = (name: string) => ({
 const startsWithParts = (parts: Array<string>, prefix: Array<string>) =>
   prefix.every((part, index) => parts[index] === part);
 
+const normalizeAbsolutePath = (path: string) => {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized.startsWith("/") ? normalized || "/" : `/${normalized}`;
+};
+
 const insertAbsoluteChild = (parent: any, parts: Array<string>, node: any) => {
   if (parts.length === 0) {
     return;
@@ -51,6 +56,102 @@ const insertAbsoluteChild = (parent: any, parts: Array<string>, node: any) => {
   insertAbsoluteChild(group, rest, node);
   parent.size += node.size || 0;
   parent.value = parent.size;
+};
+
+const sortTreeChildren = (node: any) => {
+  if (!Array.isArray(node.children)) {
+    return;
+  }
+
+  node.children.sort((a: any, b: any) => {
+    if (!!a.restricted !== !!b.restricted) {
+      return a.restricted ? 1 : -1;
+    }
+
+    const sizeDifference = (b.size || 0) - (a.size || 0);
+    return sizeDifference || String(a.name).localeCompare(String(b.name));
+  });
+  node.children.forEach(sortTreeChildren);
+};
+
+const insertRestrictedPath = (
+  parent: any,
+  parts: Array<string>,
+  restrictedPath: RestrictedPath
+) => {
+  if (parts.length === 0) {
+    return;
+  }
+
+  const [part, ...rest] = parts;
+  let child = parent.children?.find(
+    (entry: any) => entry.name === part && entry.isDirectory
+  );
+
+  if (rest.length === 0) {
+    if (child) {
+      child.restricted = true;
+      child.restrictedPath = restrictedPath.path;
+      child.restrictedReason = restrictedPath.message;
+      return;
+    }
+
+    parent.children = parent.children || [];
+    parent.children.push({
+      id: "",
+      name: part,
+      value: 0,
+      size: 0,
+      isDirectory: true,
+      children: [],
+      restricted: true,
+      restrictedPath: restrictedPath.path,
+      restrictedReason: restrictedPath.message,
+    });
+    return;
+  }
+
+  if (!child) {
+    child = makeGroupNode(part);
+    parent.children = parent.children || [];
+    parent.children.push(child);
+  }
+
+  insertRestrictedPath(child, rest, restrictedPath);
+};
+
+export const addRestrictedPathsToTree = (
+  root: any,
+  basePath: string,
+  restrictedPaths: Array<RestrictedPath> = []
+) => {
+  if (!root || !Array.isArray(root.children) || restrictedPaths.length === 0) {
+    return root;
+  }
+
+  const baseParts = pathParts(normalizeAbsolutePath(basePath || root.name || "/"));
+  const seen = new Set<string>();
+
+  restrictedPaths.forEach((restrictedPath) => {
+    const fullPath = normalizeAbsolutePath(restrictedPath.path);
+    if (seen.has(fullPath)) {
+      return;
+    }
+    seen.add(fullPath);
+
+    const fullParts = pathParts(fullPath);
+    const relativeParts = startsWithParts(fullParts, baseParts)
+      ? fullParts.slice(baseParts.length)
+      : fullParts;
+
+    insertRestrictedPath(root, relativeParts, {
+      ...restrictedPath,
+      path: fullPath,
+    });
+  });
+
+  sortTreeChildren(root);
+  return root;
 };
 
 export const groupChildrenByBasePath = (root: any, basePath = "/") => {

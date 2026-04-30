@@ -10,6 +10,7 @@ import {
   getViewNodeGraph,
   buildFullPath,
   diskItemToD3Hierarchy,
+  addRestrictedPathsToTree,
   groupChildrenByBasePath,
   itemMap,
 } from "../pruneData";
@@ -54,7 +55,7 @@ const formatProgressPercent = (percent: number) =>
 
 const Scanning = () => {
   let {
-    state: { disk, used, fullscan },
+    state: { disk, used, forceScan },
   } = useLocation() as any;
   const navigate = useNavigate();
 
@@ -78,6 +79,10 @@ const Scanning = () => {
   const [view, setView] = useState("loading");
   const [bytesProcessed, setByteProcessed] = useState(0);
   const [status, setStatus] = useState<ScanStatus>();
+  const [restrictedPaths, setRestrictedPaths] = useState<Array<RestrictedPath>>(
+    []
+  );
+  const restrictedPathsRef = useRef<Array<RestrictedPath>>([]);
   const scanStartedAt = useRef(performance.now());
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [deleteState, setDeleteState] = useState({
@@ -96,6 +101,21 @@ const Scanning = () => {
     setHoveredItem(null);
     d3Chart.current?.setHoveredNode(null);
   };
+  const addRestrictedPath = (restrictedPath: RestrictedPath) => {
+    const normalizedPath = restrictedPath.path.replace(/\\/g, "/");
+    if (
+      restrictedPathsRef.current.some((entry) => entry.path === normalizedPath)
+    ) {
+      return;
+    }
+
+    const next = [
+      ...restrictedPathsRef.current,
+      { ...restrictedPath, path: normalizedPath },
+    ];
+    restrictedPathsRef.current = next;
+    setRestrictedPaths(next);
+  };
 
   // Avvio il worker e attendo i dati
   useEffect(() => {
@@ -103,53 +123,86 @@ const Scanning = () => {
       // Skip if already loaded data
       return;
     }
-    const cached = getCachedScan(disk, fullscan);
-    if (cached) {
-      baseData.current = cached.tree;
-      baseDataD3Hierarchy.current = diskItemToD3Hierarchy(cached.tree);
-      setView("disk");
-      return;
-    }
+    let cancelled = false;
+    let scanStarted = false;
+    let timer: number | undefined;
+    const unlisteners: Array<ReturnType<typeof listen>> = [];
 
-    scanStartedAt.current = performance.now();
-    const timer = window.setInterval(() => {
-      setElapsedSeconds((performance.now() - scanStartedAt.current) / 1000);
-    }, 500);
-
-    const unlisten = listen("scan_status", (event: any) => {
-      // event.event is the event name (useful if you want to use a single callback fn for multiple event types)
-      // event.payload is the payload object
-      setStatus(event.payload as ScanStatus);
-      setElapsedSeconds((performance.now() - scanStartedAt.current) / 1000);
-    });
-
-    const unlisten2 = listen("scan_completed", (event: any) => {
-      // event.event is the event name (useful if you want to use a single callback fn for multiple event types)
-      // event.payload is the payload object
-      console.log("[scan_completed] payload bytes:", event.payload?.length, "at", new Date().toISOString());
-      try {
-        const t0 = performance.now();
-        const parsed = JSON.parse(event.payload);
-        console.log("[scan_completed] JSON.parse took", (performance.now() - t0).toFixed(1), "ms, has .tree:", !!parsed.tree);
-        baseData.current =
-          parsed.tree?.name === "(total)"
-            ? groupChildrenByBasePath(parsed.tree, disk)
-            : parsed.tree;
-        const mapped = itemMap(baseData.current);
-        setCachedScan({
-          fullscan,
-          path: disk,
-          tree: mapped,
-          used,
-        });
-        baseDataD3Hierarchy.current = diskItemToD3Hierarchy(mapped as any);
-        setView("disk");
-      } catch (e) {
-        console.error("[scan_completed] JSON.parse failed:", e, "payload snippet:", String(event.payload).slice(0, 200));
+    const startScan = async () => {
+      const cached = forceScan ? null : await getCachedScan(disk);
+      if (cancelled) {
+        return;
       }
-    });
 
-    invoke("start_scanning", { path: disk, ratio: fullscan ? "0" : "0.001" });
+      if (cached) {
+        restrictedPathsRef.current = cached.restrictedPaths || [];
+        setRestrictedPaths(cached.restrictedPaths || []);
+        baseData.current = cached.tree;
+        baseDataD3Hierarchy.current = diskItemToD3Hierarchy(cached.tree);
+        setView("disk");
+        return;
+      }
+
+      restrictedPathsRef.current = [];
+      setRestrictedPaths([]);
+      scanStartedAt.current = performance.now();
+      timer = window.setInterval(() => {
+        setElapsedSeconds((performance.now() - scanStartedAt.current) / 1000);
+      }, 500);
+
+      unlisteners.push(
+        listen("scan_status", (event: any) => {
+          setStatus(event.payload as ScanStatus);
+          setElapsedSeconds((performance.now() - scanStartedAt.current) / 1000);
+        })
+      );
+
+      unlisteners.push(
+        listen("scan_restricted_path", (event: any) => {
+          addRestrictedPath(event.payload as RestrictedPath);
+        })
+      );
+
+      unlisteners.push(
+        listen("scan_completed", (event: any) => {
+          try {
+            const parsed = JSON.parse(event.payload);
+            const tree =
+              parsed.tree?.name === "(total)"
+                ? groupChildrenByBasePath(parsed.tree, disk)
+                : parsed.tree;
+            const treeWithRestrictedPaths = addRestrictedPathsToTree(
+              tree,
+              disk,
+              restrictedPathsRef.current
+            );
+            const mapped = itemMap(treeWithRestrictedPaths);
+            setCachedScan({
+              path: disk,
+              tree: mapped,
+              used,
+              errors: restrictedPathsRef.current.length,
+              restrictedPaths: restrictedPathsRef.current,
+            }).catch(console.error);
+            baseData.current = mapped;
+            baseDataD3Hierarchy.current = diskItemToD3Hierarchy(mapped as any);
+            setView("disk");
+          } catch (e) {
+            console.error(
+              "[scan_completed] JSON.parse failed:",
+              e,
+              "payload snippet:",
+              String(event.payload).slice(0, 200)
+            );
+          }
+        })
+      );
+
+      scanStarted = true;
+      invoke("start_scanning", { path: disk, ratio: "0.001" });
+    };
+
+    startScan().catch(console.error);
     // worker.current = new Worker(new URL("./space.worker.js", import.meta.url), {
     //   type: "module",
     // });
@@ -166,13 +219,17 @@ const Scanning = () => {
     //   }
     // };
     return () => {
-      window.clearInterval(timer);
-      unlisten.then((f) => f());
-      unlisten2.then((f) => f());
-      invoke("stop_scanning", { path: disk });
+      cancelled = true;
+      if (timer) {
+        window.clearInterval(timer);
+      }
+      unlisteners.forEach((unlisten) => unlisten.then((f) => f()));
+      if (scanStarted) {
+        invoke("stop_scanning", { path: disk });
+      }
       //   worker.current!.postMessage({ type: "stop" });
     };
-  }, [disk, fullscan, used]);
+  }, [disk, forceScan, used]);
 
   // Appena ho i dati
   useEffect(() => {
@@ -218,6 +275,12 @@ const Scanning = () => {
       : null;
   const scanRate = status ? formatScanRate(status.total, elapsedSeconds) : "0 B/s";
   const listedDirectory = previewDirectory || focusedDirectory;
+  const shouldOfferFullDiskAccess =
+    window.OS_TYPE === "macos" &&
+    ((status?.errors || 0) >= 10 || restrictedPaths.length >= 10);
+  const openFullDiskAccessSettings = () => {
+    invoke("open_full_disk_access_settings").catch(console.error);
+  };
   return (
     <>
       {view == "loading" && status && (
@@ -280,6 +343,17 @@ const Scanning = () => {
                 ? `${status.errors.toLocaleString()} inaccessible items`
                 : "No access errors"}
             </div>
+            {shouldOfferFullDiskAccess && (
+              <div className="mt-3 text-center">
+                <button
+                  type="button"
+                  onClick={openFullDiskAccessSettings}
+                  className="rounded bg-gray-800 px-3 py-1 text-xs font-medium text-gray-200 hover:bg-gray-700"
+                >
+                  Full Disk Access
+                </button>
+              </div>
+            )}
           </div>
           <button
             onClick={() => navigate("/")}
@@ -334,6 +408,22 @@ const Scanning = () => {
                     focusedDirectory={focusedDirectory}
                     d3Chart={d3Chart}
                   ></ParentFolder>
+                )}
+                {restrictedPaths.length > 0 && (
+                  <div className="mb-2 flex items-center justify-between rounded-md bg-rose-950/30 px-3 py-2 text-xs text-rose-100">
+                    <span>
+                      {restrictedPaths.length.toLocaleString()} restricted
+                    </span>
+                    {shouldOfferFullDiskAccess && (
+                      <button
+                        type="button"
+                        onClick={openFullDiskAccessSettings}
+                        className="rounded bg-rose-900/60 px-2 py-1 font-medium hover:bg-rose-800"
+                      >
+                        Full Disk Access
+                      </button>
+                    )}
+                  </div>
                 )}
                 <Droppable droppableId="filelist">
                   {(provided) => (

@@ -1,27 +1,58 @@
-interface CachedScan {
-  fullscan: boolean;
+import { invoke } from "@tauri-apps/api/core";
+
+export interface CachedScan {
   path: string;
   tree: DiskItem;
   used: number;
+  errors?: number;
+  restrictedPaths?: Array<RestrictedPath>;
+  scannedAt?: number;
+}
+
+export interface ScanSnapshotSummary {
+  path: string;
+  used: number;
+  scannedAt: number;
+  errors: number;
+  restrictedCount: number;
 }
 
 const scans = new Map<string, CachedScan>();
 
-const cacheKey = (path: string, fullscan: boolean) =>
-  `${fullscan ? "full" : "quick"}:${path}`;
+export const getCachedScan = async (path: string) => {
+  const cached = scans.get(path);
+  if (cached) {
+    return cached;
+  }
 
-export const getCachedScan = (path: string, fullscan: boolean) =>
-  scans.get(cacheKey(path, fullscan)) ||
-  (!fullscan ? scans.get(cacheKey(path, true)) : undefined);
+  const snapshot = await invoke<CachedScan | null>("get_scan_snapshot", {
+    path,
+  });
+  if (snapshot) {
+    scans.set(path, snapshot);
+  }
 
-export const hasCachedScan = (path: string) =>
-  scans.has(cacheKey(path, false)) || scans.has(cacheKey(path, true));
-
-export const setCachedScan = (scan: CachedScan) => {
-  scans.set(cacheKey(scan.path, scan.fullscan), scan);
+  return snapshot;
 };
 
-export const clearCachedScan = (path: string) => {
-  scans.delete(cacheKey(path, false));
-  scans.delete(cacheKey(path, true));
+export const hasCachedScan = (path: string) => scans.has(path);
+
+export const listScanSnapshots = () =>
+  invoke<Array<ScanSnapshotSummary>>("list_scan_snapshots");
+
+export const setCachedScan = async (scan: CachedScan) => {
+  const snapshot = {
+    ...scan,
+    scannedAt: scan.scannedAt || Date.now(),
+    errors: scan.errors || scan.restrictedPaths?.length || 0,
+    restrictedPaths: scan.restrictedPaths || [],
+  };
+
+  scans.set(scan.path, snapshot);
+  await invoke("save_scan_snapshot", { snapshot });
+};
+
+export const clearCachedScan = async (path: string) => {
+  scans.delete(path);
+  await invoke("delete_scan_snapshot", { path });
 };

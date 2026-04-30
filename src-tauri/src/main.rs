@@ -4,6 +4,7 @@
 )]
 #![allow(unexpected_cfgs)]
 mod scan;
+mod snapshots;
 mod window_style;
 
 use serde::Serialize;
@@ -66,10 +67,28 @@ fn main() {
             get_disks,
             start_scanning,
             stop_scanning,
-            show_in_folder
+            show_in_folder,
+            open_full_disk_access_settings,
+            snapshots::get_scan_snapshot,
+            snapshots::list_scan_snapshots,
+            snapshots::save_scan_snapshot,
+            snapshots::delete_scan_snapshot
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[tauri::command]
+fn open_full_disk_access_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+            .spawn()
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
