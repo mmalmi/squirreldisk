@@ -20,3 +20,8 @@ export const hasCachedScan = (path: string) =>
 export const setCachedScan = (scan: CachedScan) => {
   scans.set(cacheKey(scan.path, scan.fullscan), scan);
 };
+
+export const clearCachedScan = (path: string) => {
+  scans.delete(cacheKey(path, false));
+  scans.delete(cacheKey(path, true));
+};

@@ -88,6 +88,15 @@ const Scanning = () => {
 
   const [deleteList, setDeleteList] = useState<Array<D3HierarchyDiskItem>>([]);
   const deleteMap = useRef<Map<string, boolean>>(new Map());
+  const hoverListItem = (item: D3HierarchyDiskItem) => {
+    setHoveredItem({ ...item.data });
+    d3Chart.current?.setHoveredNode(item);
+  };
+  const clearHoveredItem = () => {
+    setHoveredItem(null);
+    d3Chart.current?.setHoveredNode(null);
+  };
+
   // Avvio il worker e attendo i dati
   useEffect(() => {
     if (baseData.current) {
@@ -308,7 +317,7 @@ const Scanning = () => {
               <div
                 className="chartpartition flex-1 flex justify-items-center	items-center"
                 onMouseLeave={() => {
-                  setHoveredItem(null);
+                  clearHoveredItem();
                   setPreviewDirectory(null);
                 }}
               >
@@ -345,6 +354,8 @@ const Scanning = () => {
                             index={index}
                             deleteMap={deleteMap.current}
                             color={getChartColor(c)}
+                            onHover={hoverListItem}
+                            onHoverEnd={clearHoveredItem}
                           ></FileLine>
                         ))}
 

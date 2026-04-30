@@ -1,43 +1,128 @@
-import { Link } from "react-router-dom";
-import diskIcon from "../assets/harddisk.png";
-import removableDriver from "../assets/removable-drive.png";
-
+import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
-const DiskItem = ({ disk, hasScan }: any) => {
+import diskIcon from "../assets/harddisk.png";
+import removableDriver from "../assets/removable-drive.png";
+import { clearCachedScan } from "../scanCache";
+
+type MenuAction = {
+  label: string;
+  onSelect: () => void;
+  separatorBefore?: boolean;
+  destructive?: boolean;
+};
+
+const DiskItem = ({ disk, hasScan, onCacheChange }: any) => {
   const navigate = useNavigate();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const x = [
     { tc: "text-green-700", bg: "bg-green-600", from: 0, to: 0.6 },
     { tc: "text-yellow-700", bg: "bg-yellow-600", from: 0.6, to: 0.7 },
     { tc: "text-red-700", bg: "bg-red-600", from: 0.7, to: 1 },
   ];
 
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    const closeMenu = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+
+    document.addEventListener("click", closeMenu);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("click", closeMenu);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [menuOpen]);
+
+  const used = disk.totalSpace - disk.availableSpace;
   const perc = (disk.totalSpace - disk.availableSpace) / disk.totalSpace;
   const xy: any = x.find((e) => perc > e.from && perc <= e.to);
 
   const icona = disk.isRemovable ? removableDriver : diskIcon;
   const mul = window.OS_TYPE === "windows" ? 1024 : 1000;
 
+  const openDisk = (fullscan: boolean) => {
+    setMenuOpen(false);
+    navigate("/disk", {
+      state: {
+        disk: disk.sMountPoint,
+        used,
+        fullscan,
+      },
+    });
+  };
+
+  const rescan = (fullscan: boolean) => {
+    clearCachedScan(disk.sMountPoint);
+    onCacheChange?.();
+    openDisk(fullscan);
+  };
+
+  const forgetScan = () => {
+    clearCachedScan(disk.sMountPoint);
+    onCacheChange?.();
+    setMenuOpen(false);
+  };
+
+  const showInFinder = () => {
+    setMenuOpen(false);
+    invoke("show_in_folder", { path: disk.sMountPoint }).catch(console.error);
+  };
+
+  const stopRowClick = (event: ReactMouseEvent) => {
+    event.stopPropagation();
+  };
+
+  const stopRowContextMenu = (event: ReactMouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const actions: MenuAction[] = hasScan
+    ? [
+        { label: "View", onSelect: () => openDisk(false) },
+        { label: "Rescan", onSelect: () => rescan(false) },
+        { label: "Full Rescan", onSelect: () => rescan(true) },
+        {
+          label: "Forget Scan Result",
+          onSelect: forgetScan,
+          separatorBefore: true,
+          destructive: true,
+        },
+        {
+          label: "Show in Finder",
+          onSelect: showInFinder,
+          separatorBefore: true,
+        },
+      ]
+    : [
+        { label: "Scan", onSelect: () => openDisk(false) },
+        { label: "Full Scan", onSelect: () => openDisk(true) },
+        {
+          label: "Show in Finder",
+          onSelect: showInFinder,
+          separatorBefore: true,
+        },
+      ];
+
   return (
     <div
       onContextMenu={(e) => {
         e.preventDefault();
-        navigate("/disk", {
-          state: {
-            disk: disk.sMountPoint,
-            used: disk.totalSpace - disk.availableSpace,
-            fullscan: true,
-          },
-        });
+        openDisk(true);
       }}
       onClick={() => {
-        navigate("/disk", {
-          state: {
-            disk: disk.sMountPoint,
-            used: disk.totalSpace - disk.availableSpace,
-            fullscan: false,
-          },
-        });
+        openDisk(false);
       }}
       className="text-white p-4 flex gap-4 items-center hover:bg-gray-800 cursor-pointer"
     >
@@ -53,17 +138,69 @@ const DiskItem = ({ disk, hasScan }: any) => {
             </span>
             {/* <span className="opacity-60"></span> */}
           </span>
-          <span className="text-sm font-medium text-right text-white">
-            <span className="rounded bg-gray-700 px-3 py-1 text-xs text-gray-200">
-              {hasScan ? "View" : "Scan"}
-            </span>
+          <div className="text-sm font-medium text-right text-white">
+            <div
+              ref={menuRef}
+              className="relative inline-flex text-xs font-semibold text-gray-100"
+              onClick={stopRowClick}
+              onContextMenu={stopRowContextMenu}
+            >
+              <button
+                type="button"
+                className="rounded-l bg-gray-700 px-3 py-1 hover:bg-gray-600"
+                onClick={() => openDisk(false)}
+              >
+                {hasScan ? "View" : "Scan"}
+              </button>
+              <button
+                type="button"
+                aria-label="More disk actions"
+                aria-expanded={menuOpen}
+                aria-haspopup="menu"
+                className="rounded-r border-l border-gray-600 bg-gray-700 px-1.5 py-1 hover:bg-gray-600"
+                onClick={() => setMenuOpen((open) => !open)}
+              >
+                <svg
+                  className="h-3 w-3"
+                  viewBox="0 0 12 12"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <path d="M2.2 4.2h7.6L6 8 2.2 4.2Z" />
+                </svg>
+              </button>
+              {menuOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full z-30 mt-2 w-44 overflow-hidden rounded-md border border-gray-700 bg-gray-900 py-1 text-left shadow-2xl"
+                >
+                  {actions.map((action) => (
+                    <div key={action.label}>
+                      {action.separatorBefore && (
+                        <div className="my-1 border-t border-gray-700" />
+                      )}
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className={`block w-full px-3 py-2 text-left text-xs font-semibold hover:bg-gray-800 ${
+                          action.destructive ? "text-rose-200" : "text-gray-100"
+                        }`}
+                        onClick={action.onSelect}
+                      >
+                        {action.label}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             <br />
             <span className="mt-2 inline-block">{(perc * 100).toFixed(0)}%</span>
             <br />
             <span className="opacity-60">
               {(disk.availableSpace / mul / mul / mul).toFixed(1)} GB Free
             </span>
-          </span>
+          </div>
         </div>
         <div className="w-full mt-2 bg-gray-700 rounded-full h-2.5">
           {xy && (

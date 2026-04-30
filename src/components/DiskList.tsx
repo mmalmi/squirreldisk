@@ -22,7 +22,11 @@ declare global {
 const DiskList = () => {
   const [disks, setDisks] = useState([]);
   const [appVersion, setAppVersion] = useState("1.0.0");
+  const [, setCacheRevision] = useState(0);
   const navigate = useNavigate();
+  const handleCacheChange = () => {
+    setCacheRevision((revision) => revision + 1);
+  };
   useEffect(() => {
     getVersion().then((v) => setAppVersion(v));
     //   window.electron.app
@@ -76,6 +80,7 @@ const DiskList = () => {
             key={disk.sMountPoint}
             disk={disk}
             hasScan={hasCachedScan(disk.sMountPoint)}
+            onCacheChange={handleCacheChange}
           ></DiskItem>
         ))}
         <div
@@ -111,8 +116,7 @@ const DiskList = () => {
           </div>
         </div>
       </div>
-      <div className="p-4 text-white justify-between opacity-20 w-full flex">
-        <div>Tip: Right Click for a full disk scan (slower)</div>
+      <div className="p-4 text-white justify-end opacity-20 w-full flex">
         <div>
           <div className="inline-block inject_here"></div> v. {appVersion}
         </div>

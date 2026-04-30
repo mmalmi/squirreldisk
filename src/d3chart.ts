@@ -60,6 +60,93 @@ const titleText = (node: D3HierarchyDiskItem, mul: number) =>
     2
   )} GB`;
 
+const baseArcOpacity = (
+  node: D3HierarchyDiskItem,
+  arcData: D3HierarchyDiskItemArc = node.current
+) => {
+  if (!arcVisible(arcData)) {
+    return 0;
+  }
+
+  return node.children ? 0.88 : 0.74;
+};
+
+const hoverArcOpacity = (
+  node: D3HierarchyDiskItem,
+  hoveredNodeId: string | null
+) => {
+  const baseOpacity = baseArcOpacity(node);
+
+  if (!hoveredNodeId || baseOpacity === 0) {
+    return baseOpacity;
+  }
+
+  return node.data.id === hoveredNodeId ? 1 : Math.max(baseOpacity - 0.18, 0.42);
+};
+
+const applyHoverState = (
+  path: d3.Selection<
+    SVGPathElement,
+    D3HierarchyDiskItem,
+    SVGGElement,
+    D3HierarchyDiskItem
+  >,
+  hoveredNodeId: string | null,
+  animate = true
+) => {
+  path.interrupt("hover").interrupt("pulse");
+  const visibleHoveredNodeId =
+    hoveredNodeId && !path.filter((d) => d.data.id === hoveredNodeId).empty()
+      ? hoveredNodeId
+      : null;
+
+  const selection = animate
+    ? (path.transition("hover").duration(160).ease(d3.easeCubicOut) as any)
+    : path;
+
+  selection
+    .attr("fill-opacity", (d: D3HierarchyDiskItem) =>
+      hoverArcOpacity(d, visibleHoveredNodeId)
+    )
+    .attr("stroke", (d: D3HierarchyDiskItem) =>
+      d.data.id === visibleHoveredNodeId ? "#f8fafc" : "#2f3746"
+    )
+    .attr("stroke-width", (d: D3HierarchyDiskItem) =>
+      d.data.id === visibleHoveredNodeId ? 2.25 : 0.75
+    );
+
+  const startPulse = () => {
+    if (!visibleHoveredNodeId) return;
+
+    const hoveredPath = path.filter((d) => d.data.id === visibleHoveredNodeId);
+    const pulse = () => {
+      hoveredPath
+        .transition("pulse")
+        .duration(650)
+        .ease(d3.easeSinInOut)
+        .attr("fill-opacity", 0.92)
+        .attr("stroke-width", 3)
+        .transition()
+        .duration(650)
+        .ease(d3.easeSinInOut)
+        .attr("fill-opacity", 1)
+        .attr("stroke-width", 2.25)
+        .on("end", pulse);
+    };
+
+    pulse();
+  };
+
+  if (animate) {
+    selection
+      .end()
+      .then(startPulse)
+      .catch(() => {});
+  } else {
+    startPulse();
+  }
+};
+
 // const setTargetAngles = (
 //   root: D3HierarchyDiskItem,
 //   focusedNode: D3HierarchyDiskItem
@@ -109,7 +196,8 @@ const animateToTarget = (
     D3HierarchyDiskItem,
     SVGGElement,
     D3HierarchyDiskItem
-  >
+  >,
+  getHoveredNodeId: () => string | null
 ) => {
   // Transition the data on all arcs, even the ones that aren’t visible,
   // so that if this transition is interrupted, entering arcs will start
@@ -135,7 +223,7 @@ const animateToTarget = (
       return !!(+this.getAttribute("fill-opacity")! || arcVisible(d.target));
     })
     .attr("fill-opacity", (d: any) =>
-      arcVisible(d.target) ? (d.children ? 0.6 : 0.4) : 0
+      arcVisible(d.target) ? baseArcOpacity(d, d.target) : 0
     )
     .attrTween("d", (d) => () => {
       if (!d.current) {
@@ -145,8 +233,7 @@ const animateToTarget = (
     })
     .end()
     .then(() => {
-      // Cut OUT
-      // delayedOp()
+      applyHoverState(path, getHoveredNodeId());
     })
     .catch((e) => {
       // console.error(e);
@@ -234,11 +321,10 @@ const updateData = (
         let xx = enter
           .append("path")
           .attr("fill", getChartColor)
-          .attr("fill-opacity", (d) =>
-            arcVisible(d.current) ? (d.children ? 0.88 : 0.74) : 0
-          )
+          .attr("fill-opacity", (d) => baseArcOpacity(d))
           .attr("stroke", "#2f3746")
           .attr("stroke-width", 0.75)
+          .attr("stroke-linejoin", "round")
           .attr("d", (d) => arc(d.current))
           .style("cursor", "pointer")
           .on("click", arcClickHandler)
@@ -251,9 +337,9 @@ const updateData = (
         update.select("title").text((d) => titleText(d, mul));
         return update
           .attr("fill", getChartColor)
-          .attr("fill-opacity", (d) =>
-            arcVisible(d.current) ? (d.children ? 0.88 : 0.74) : 0
-          )
+          .attr("fill-opacity", (d) => baseArcOpacity(d))
+          .attr("stroke", "#2f3746")
+          .attr("stroke-width", 0.75)
           .attr("d", (d) => arc(d.current));
       }
     );
@@ -273,6 +359,7 @@ export const getChart = (
 ) => {
   // Map a value to unique color
   let current = root;
+  let hoveredNodeId: string | null = null;
   // let color = d3.scaleOrdinal(
   //   d3.quantize(d3.interpolateRainbow, root.children!.length + 3)
   // );
@@ -302,10 +389,17 @@ export const getChart = (
 
   let path = updateData(root, root, innerG, arcClickHandler, arcHoverHandler);
 
+  const setHoveredNode = (node: D3HierarchyDiskItem | null) => {
+    hoveredNodeId = node?.data.id ?? null;
+    applyHoverState(path, hoveredNodeId);
+  };
+
   function centerHoverHandler(e: any, node: D3HierarchyDiskItem) {
+    setHoveredNode(null);
     centerHover(e, node);
   }
   function arcHoverHandler(e: any, node: D3HierarchyDiskItem) {
+    setHoveredNode(node);
     arcHover(e, node);
   }
   function centerClickHandler(e: any, focusedNode: D3HierarchyDiskItem) {
@@ -325,7 +419,7 @@ export const getChart = (
     );
     backElement.datum(focusedNode.parent || root);
     // setTargetAngles(root, focusedNode);
-    animateToTarget(g, path);
+    animateToTarget(g, path, () => hoveredNodeId);
   }
 
   function arcClickHandler(event: any, focusedNode: D3HierarchyDiskItem) {
@@ -347,7 +441,7 @@ export const getChart = (
     // setTargetAngles(focusedNode.parent || root, focusedNode);
     // console.log({aft: root})
 
-    animateToTarget(g, path);
+    animateToTarget(g, path, () => hoveredNodeId);
     // const clickRes = getNodeData(event, focusedNode);
     // if (clickRes) {
     //   // root = clickRes;
@@ -366,6 +460,7 @@ export const getChart = (
     backToParent: (node: D3HierarchyDiskItem) => {
       centerClickHandler(null, node);
     },
+    setHoveredNode,
     deleteNodes: (nodes: Array<D3HierarchyDiskItem>) => {
       nodes.forEach((node) => {
         node
@@ -390,7 +485,7 @@ export const getChart = (
         arcClickHandler,
         arcHoverHandler
       );
-      animateToTarget(g, path);
+      animateToTarget(g, path, () => hoveredNodeId);
     },
   };
 };

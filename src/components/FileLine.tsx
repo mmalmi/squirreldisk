@@ -12,6 +12,8 @@ interface FileLineProps {
   index: number;
   deleteMap: Map<string, boolean>;
   color: string;
+  onHover: (item: D3HierarchyDiskItem) => void;
+  onHoverEnd: () => void;
 }
 
 const mul = window.OS_TYPE === "windows" ? 1024 : 1000;
@@ -22,6 +24,8 @@ export const FileLine = ({
   index,
   deleteMap,
   color,
+  onHover,
+  onHoverEnd,
 }: FileLineProps) => {
   return (
     <Draggable draggableId={item.data.id} index={index}>
@@ -47,6 +51,8 @@ export const FileLine = ({
                 ) /*window.electron.diskUtils.showItemInFolder(buildFullPath(c))*/
               : invoke("show_in_folder", { path: buildFullPath(item) });
           }}
+          onMouseEnter={() => onHover(item)}
+          onMouseLeave={onHoverEnd}
           {...provided.draggableProps}
           {...provided.dragHandleProps}
           ref={provided.innerRef}
