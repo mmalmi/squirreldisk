@@ -1,6 +1,5 @@
 import * as d3 from "d3";
 // const pLimit = require('p-limit')
-import { v4 as uuidv4 } from "uuid";
 
 let genId = 0;
 

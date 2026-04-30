@@ -116,6 +116,45 @@ struct RestrictedPathPayload {
     message: String,
 }
 
+fn progress_regex() -> Regex {
+    Regex::new(r"\(scanned ([0-9]+), total ([0-9]+)(?:, linked [0-9]+, shared [0-9]+)?(?:, erred ([0-9]+))?\)").unwrap()
+}
+
+fn restricted_path_regex() -> Regex {
+    Regex::new(r#"\[error\]\s+([^\s]+)\s+"([^"]+)":\s*(.+)"#).unwrap()
+}
+
+fn payload_from_progress_captures(groups: Captures) -> Payload {
+    Payload {
+        items: groups
+            .get(1)
+            .map_or("0", |m| m.as_str())
+            .trim_end()
+            .parse::<u64>()
+            .unwrap(),
+        total: groups
+            .get(2)
+            .map_or("0", |m| m.as_str())
+            .trim_end()
+            .parse::<u64>()
+            .unwrap(),
+        errors: groups
+            .get(3)
+            .map_or("0", |m| m.as_str())
+            .trim_end()
+            .parse::<u64>()
+            .unwrap(),
+    }
+}
+
+fn restricted_path_from_captures(groups: Captures) -> RestrictedPathPayload {
+    RestrictedPathPayload {
+        operation: groups.get(1).map_or("", |m| m.as_str()).to_string(),
+        path: groups.get(2).map_or("", |m| m.as_str()).to_string(),
+        message: groups.get(3).map_or("", |m| m.as_str()).to_string(),
+    }
+}
+
 // Start scan
 pub fn start(
     app_handle: tauri::AppHandle,
@@ -198,8 +237,8 @@ pub fn start(
     // unlisten to the event using the `id` returned on the `listen_global` function
     // an `once_global` API is also exposed on the `App` struct
 
-    let progress_re = Regex::new(r"\(scanned ([0-9]+), total ([0-9]+)(?:, linked [0-9]+, shared [0-9]+)?(?:, erred ([0-9]+))?\)").unwrap();
-    let error_re = Regex::new(r#"\[error\]\s+([^\s]+)\s+"([^"]+)":\s*(.+)"#).unwrap();
+    let progress_re = progress_regex();
+    let error_re = restricted_path_regex();
 
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -222,11 +261,7 @@ pub fn start(
                         app_handle
                             .emit(
                                 "scan_restricted_path",
-                                RestrictedPathPayload {
-                                    operation: groups.get(1).map_or("", |m| m.as_str()).to_string(),
-                                    path: groups.get(2).map_or("", |m| m.as_str()).to_string(),
-                                    message: groups.get(3).map_or("", |m| m.as_str()).to_string(),
-                                },
+                                restricted_path_from_captures(groups),
                             )
                             .ok();
                     }
@@ -350,28 +385,74 @@ pub fn stop(state: tauri::State<'_, MyState>) {
 
 fn emit_scan_status(app_handle: &tauri::AppHandle, groups: Captures) {
     app_handle
-        .emit(
-            "scan_status",
-            Payload {
-                items: groups
-                    .get(1)
-                    .map_or("0", |m| m.as_str())
-                    .trim_end()
-                    .parse::<u64>()
-                    .unwrap(),
-                total: groups
-                    .get(2)
-                    .map_or("0", |m| m.as_str())
-                    .trim_end()
-                    .parse::<u64>()
-                    .unwrap(),
-                errors: groups
-                    .get(3)
-                    .map_or("0", |m| m.as_str())
-                    .trim_end()
-                    .parse::<u64>()
-                    .unwrap(),
-            },
-        )
+        .emit("scan_status", payload_from_progress_captures(groups))
         .unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_regex_parses_plain_progress() {
+        let regex = progress_regex();
+        let groups = regex
+            .captures("(scanned 12, total 345)")
+            .expect("progress is parsed");
+        let payload = payload_from_progress_captures(groups);
+
+        assert_eq!(payload.items, 12);
+        assert_eq!(payload.total, 345);
+        assert_eq!(payload.errors, 0);
+    }
+
+    #[test]
+    fn progress_regex_parses_pdu_shared_and_error_counts() {
+        let regex = progress_regex();
+        let groups = regex
+            .captures("(scanned 12, total 345, linked 6, shared 7, erred 8)")
+            .expect("progress is parsed");
+        let payload = payload_from_progress_captures(groups);
+
+        assert_eq!(payload.items, 12);
+        assert_eq!(payload.total, 345);
+        assert_eq!(payload.errors, 8);
+    }
+
+    #[test]
+    fn restricted_path_regex_parses_pdu_errors() {
+        let regex = restricted_path_regex();
+        let groups = regex
+            .captures(r#"[error] read_dir "/Users/me/Library/Mobile Documents": Permission denied"#)
+            .expect("error is parsed");
+        let restricted_path = restricted_path_from_captures(groups);
+
+        assert_eq!(restricted_path.operation, "read_dir");
+        assert_eq!(restricted_path.path, "/Users/me/Library/Mobile Documents");
+        assert_eq!(restricted_path.message, "Permission denied");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_user_scan_expands_home_dirs_but_excludes_cloud_library_dirs() {
+        let root = std::env::temp_dir().join(format!("squirreldisk-scan-{}", std::process::id()));
+        let users = root.join("Users");
+        let home = users.join("alice");
+        let library = home.join("Library");
+        fs::create_dir_all(library.join("Caches")).unwrap();
+        fs::create_dir_all(library.join("CloudStorage")).unwrap();
+        fs::create_dir_all(library.join("Mobile Documents")).unwrap();
+        fs::create_dir_all(home.join("Desktop")).unwrap();
+
+        let mut paths = Vec::new();
+        assert!(add_user_homes_skipping_cloud_dirs(&users, &mut paths));
+        let paths = paths.join("\n");
+
+        assert!(paths.contains(&home.join("Desktop").display().to_string()));
+        assert!(paths.contains(&library.join("Caches").display().to_string()));
+        assert!(!paths.contains(&library.join("CloudStorage").display().to_string()));
+        assert!(!paths.contains(&library.join("Mobile Documents").display().to_string()));
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }

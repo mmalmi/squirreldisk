@@ -1,6 +1,5 @@
 import * as d3 from "d3";
 import prettyBytes from "pretty-bytes";
-import { v4 as uuidv4 } from "uuid";
 import { getChartColor } from "./chartColors";
 
 var width = 600;
@@ -256,6 +255,7 @@ const updateData = (
   let overallSize = focused.value || 0;
   let accumulator: D3HierarchyDiskItem | null = null;
   let accumulatorLastParent = null;
+  let smallerItemIndex = 0;
   let skipMap: any = {};
 
   // Tronco sulla max depth
@@ -292,7 +292,9 @@ const updateData = (
       } else {
         skipMap[item.data.id] = true;
         let v: DiskItem = {
-          id: uuidv4(),
+          id: `${item.parent?.data.id || focused.data.id}/__smaller_items_${
+            smallerItemIndex++
+          }`,
           isDirectory: false,
           name: "Smaller Items",
           value: item.value || 0,
