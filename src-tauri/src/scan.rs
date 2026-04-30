@@ -1,5 +1,5 @@
 use std::fs;
-use std::ops::Not;
+use std::path::Path;
 
 use regex::{Captures, Regex};
 
@@ -8,6 +8,35 @@ use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
 use crate::MyState;
+
+#[cfg(target_os = "macos")]
+fn add_home_children_skipping_cloud_dirs(home_dir: &Path, paths: &mut Vec<String>) {
+    let entries = match fs::read_dir(home_dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let entry_path = entry.path();
+        let name = entry.file_name();
+
+        if name == "Library" && entry_path.is_dir() {
+            let library_entries = match fs::read_dir(&entry_path) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+
+            for library_entry in library_entries.flatten() {
+                let library_name = library_entry.file_name();
+                if library_name != "Mobile Documents" && library_name != "CloudStorage" {
+                    paths.push(library_entry.path().display().to_string());
+                }
+            }
+        } else {
+            paths.push(entry_path.display().to_string());
+        }
+    }
+}
 
 #[derive(Clone, serde::Serialize)]
 struct Payload {
@@ -41,9 +70,30 @@ pub fn start(
 
         for scan_path in paths {
             let scan_path_str = scan_path.unwrap().path();
-            if banned.contains(&(scan_path_str.to_str().unwrap())).not() {
-                paths_to_scan.push(scan_path_str.display().to_string());
+            let path_str = scan_path_str.to_str().unwrap();
+            if banned.contains(&path_str) {
+                continue;
             }
+
+            #[cfg(target_os = "macos")]
+            {
+                if path_str == "/Users" {
+                    if let Ok(users) = fs::read_dir("/Users") {
+                        for user_entry in users.flatten() {
+                            let user_path = user_entry.path();
+                            if user_path.is_dir() {
+                                add_home_children_skipping_cloud_dirs(
+                                    &user_path,
+                                    &mut paths_to_scan,
+                                );
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            paths_to_scan.push(scan_path_str.display().to_string());
         }
     } else {
         paths_to_scan.push(path);
