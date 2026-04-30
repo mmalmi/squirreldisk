@@ -1,16 +1,7 @@
 import * as d3 from "d3";
 import prettyBytes from "pretty-bytes";
 import { v4 as uuidv4 } from "uuid";
-import pSBC from "shade-blend-color";
-
-const depthmap: any = {
-  0: 0,
-  1: -0.2,
-  2: -0.35,
-  3: -0.45,
-  4: -0.55,
-  5: -0.6,
-};
+import { getChartColor } from "./chartColors";
 
 var width = 600;
 var radius = width / 10;
@@ -132,7 +123,6 @@ const animateToTarget = (
       // console.error(e);
     });
 };
-let gcolor: d3.ScaleOrdinal<string, string, never> | null;
 const updateData = (
   root: D3HierarchyDiskItem,
   focused: D3HierarchyDiskItem,
@@ -148,7 +138,6 @@ const updateData = (
   let accumulator: D3HierarchyDiskItem | null = null;
   let accumulatorLastParent = null;
   let skipMap: any = {};
-  let colorCounter = 0;
 
   // Tronco sulla max depth
   for (const item of focused.descendants().slice(1)) {
@@ -171,9 +160,6 @@ const updateData = (
     }
     if ((item.value || 0) / overallSize > 0.005) {
       // Includo item grandi
-      if (item.parent === root) {
-        colorCounter += 1;
-      }
       filtered.push(item);
     } else {
       // Accumulo item piccoli
@@ -198,15 +184,9 @@ const updateData = (
         accumulatorLastParent = item.parent;
         accumulator.parent = item.parent;
 
-        Object.assign((accumulator as any), item)
+        Object.assign((accumulator as any), item);
       }
     }
-  }
-  if (!gcolor && focused === root) {
-    console.log("SET COLOR", colorCounter);
-    gcolor = d3.scaleOrdinal(
-      d3.quantize(d3.interpolateRainbow, colorCounter + 2)
-    );
   }
   setTargetAngles(filtered, focused);
   // console.log({filtered})
@@ -224,19 +204,12 @@ const updateData = (
       (enter) => {
         let xx = enter
           .append("path")
-          .attr("fill", (d) => {
-            const depth = d.depth;
-
-            let v = -0.6;
-            if (depth in depthmap) {
-              v = depthmap[depth];
-            }
-            while (d.depth > 1) d = d.parent!;
-            return pSBC(v, gcolor!(d.data.name));
-          })
+          .attr("fill", getChartColor)
           .attr("fill-opacity", (d) =>
-            arcVisible(d.current) ? (d.children ? 0.6 : 0.4) : 0
+            arcVisible(d.current) ? (d.children ? 0.88 : 0.74) : 0
           )
+          .attr("stroke", "#2f3746")
+          .attr("stroke-width", 0.75)
           .attr("d", (d) => arc(d.current))
           .style("cursor", "pointer")
           .on("click", arcClickHandler)
@@ -256,18 +229,9 @@ const updateData = (
       },
       (update) =>
         update
-          .attr("fill", (d) => {
-            const depth = d.depth;
-
-            let v = -0.6;
-            if (depth in depthmap) {
-              v = depthmap[depth];
-            }
-            while (d.depth > 1) d = d.parent!;
-            return pSBC(v, gcolor!(d.data.name));
-          })
+          .attr("fill", getChartColor)
           .attr("fill-opacity", (d) =>
-            arcVisible(d.current) ? (d.children ? 0.6 : 0.4) : 0
+            arcVisible(d.current) ? (d.children ? 0.88 : 0.74) : 0
           )
           .attr("d", (d) => arc(d.current))
     );

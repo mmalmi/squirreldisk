@@ -19,6 +19,8 @@ import { DragDropContext, Droppable } from "react-beautiful-dnd";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { remove } from "@tauri-apps/plugin-fs";
+import { getChartColor } from "../chartColors";
+import { getCachedScan, setCachedScan } from "../scanCache";
 
 (window as any).LockDNDEdgeScrolling = () => true;
 
@@ -66,6 +68,8 @@ const Scanning = () => {
   // Current Directory
   const [focusedDirectory, setFocusedDirectory] =
     useState<D3HierarchyDiskItem | null>(null);
+  const [previewDirectory, setPreviewDirectory] =
+    useState<D3HierarchyDiskItem | null>(null);
   // Hovered Item
   const [hoveredItem, setHoveredItem] = useState<DiskItem | null>(null);
 
@@ -90,6 +94,14 @@ const Scanning = () => {
       // Skip if already loaded data
       return;
     }
+    const cached = getCachedScan(disk, fullscan);
+    if (cached) {
+      baseData.current = cached.tree;
+      baseDataD3Hierarchy.current = diskItemToD3Hierarchy(cached.tree);
+      setView("disk");
+      return;
+    }
+
     scanStartedAt.current = performance.now();
     const timer = window.setInterval(() => {
       setElapsedSeconds((performance.now() - scanStartedAt.current) / 1000);
@@ -115,6 +127,12 @@ const Scanning = () => {
             ? groupChildrenByBasePath(parsed.tree, disk)
             : parsed.tree;
         const mapped = itemMap(baseData.current);
+        setCachedScan({
+          fullscan,
+          path: disk,
+          tree: mapped,
+          used,
+        });
         baseDataD3Hierarchy.current = diskItemToD3Hierarchy(mapped as any);
         setView("disk");
       } catch (e) {
@@ -145,7 +163,7 @@ const Scanning = () => {
       invoke("stop_scanning", { path: disk });
       //   worker.current!.postMessage({ type: "stop" });
     };
-  }, [disk, setStatus]);
+  }, [disk, fullscan, used]);
 
   // Appena ho i dati
   useEffect(() => {
@@ -162,13 +180,16 @@ const Scanning = () => {
         centerHover: (_, p) => {
           // console.log({centerHover: p})
           setHoveredItem({ ...p.data });
+          setPreviewDirectory(null);
         },
         arcHover: (_, p) => {
           // console.log({arcHover: p})
           setHoveredItem({ ...p.data });
+          setPreviewDirectory(p.children ? p : null);
         },
         arcClicked: (_, p) => {
           setFocusedDirectory(p);
+          setPreviewDirectory(null);
           return p;
           const curNodePath = buildPath(p);
           const vn = getViewNode(baseData.current!, curNodePath);
@@ -187,6 +208,7 @@ const Scanning = () => {
       ? Math.min((status.total / expectedTotal) * 100, 99.9)
       : null;
   const scanRate = status ? formatScanRate(status.total, elapsedSeconds) : "0 B/s";
+  const listedDirectory = previewDirectory || focusedDirectory;
   return (
     <>
       {view == "loading" && status && (
@@ -283,7 +305,13 @@ const Scanning = () => {
             }}
           >
             <div className="flex flex-1">
-              <div className="chartpartition flex-1 flex justify-items-center	items-center">
+              <div
+                className="chartpartition flex-1 flex justify-items-center	items-center"
+                onMouseLeave={() => {
+                  setHoveredItem(null);
+                  setPreviewDirectory(null);
+                }}
+              >
                 <svg
                   ref={svgRef}
                   width={"100%"}
@@ -306,9 +334,9 @@ const Scanning = () => {
                       ref={provided.innerRef}
                       {...provided.droppableProps}
                     >
-                      {focusedDirectory &&
-                        focusedDirectory.children &&
-                        focusedDirectory.children.map((c, index) => (
+                      {listedDirectory &&
+                        listedDirectory.children &&
+                        listedDirectory.children.map((c, index) => (
                           <FileLine
                             key={c.data.id}
                             item={c}
@@ -316,6 +344,7 @@ const Scanning = () => {
                             d3Chart={d3Chart}
                             index={index}
                             deleteMap={deleteMap.current}
+                            color={getChartColor(c)}
                           ></FileLine>
                         ))}
 

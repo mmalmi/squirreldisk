@@ -11,6 +11,7 @@ interface FileLineProps {
   d3Chart: any;
   index: number;
   deleteMap: Map<string, boolean>;
+  color: string;
 }
 
 const mul = window.OS_TYPE === "windows" ? 1024 : 1000;
@@ -20,6 +21,7 @@ export const FileLine = ({
   d3Chart,
   index,
   deleteMap,
+  color,
 }: FileLineProps) => {
   return (
     <Draggable draggableId={item.data.id} index={index}>
@@ -49,8 +51,12 @@ export const FileLine = ({
           {...provided.dragHandleProps}
           ref={provided.innerRef}
         >
+          <div
+            className="h-3 w-3 shrink-0 rounded-full mr-3 self-center"
+            style={{ backgroundColor: color }}
+          />
           <img
-            className="h-4 w-4 basis-1/12 mr-3"
+            className="h-4 w-4 shrink-0 mr-3"
             src={
               item.data.isDirectory
                 ? "/fileicons/" + getIconForFolder(item.data.name)

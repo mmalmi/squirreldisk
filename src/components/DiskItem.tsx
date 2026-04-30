@@ -4,7 +4,7 @@ import removableDriver from "../assets/removable-drive.png";
 
 import { useNavigate } from "react-router-dom";
 
-const DiskItem = ({ disk }: any) => {
+const DiskItem = ({ disk, hasScan }: any) => {
   const navigate = useNavigate();
   const x = [
     { tc: "text-green-700", bg: "bg-green-600", from: 0, to: 0.6 },
@@ -54,7 +54,12 @@ const DiskItem = ({ disk }: any) => {
             {/* <span className="opacity-60"></span> */}
           </span>
           <span className="text-sm font-medium text-right text-white">
-            {(perc * 100).toFixed(0)}%<br />
+            <span className="rounded bg-gray-700 px-3 py-1 text-xs text-gray-200">
+              {hasScan ? "View" : "Scan"}
+            </span>
+            <br />
+            <span className="mt-2 inline-block">{(perc * 100).toFixed(0)}%</span>
+            <br />
             <span className="opacity-60">
               {(disk.availableSpace / mul / mul / mul).toFixed(1)} GB Free
             </span>

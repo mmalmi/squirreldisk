@@ -8,6 +8,7 @@ import { platform } from "@tauri-apps/plugin-os";
 import { open } from "@tauri-apps/plugin-dialog";
 import folderIcon from "../assets/folder.png";
 import { useNavigate } from "react-router-dom";
+import { hasCachedScan } from "../scanCache";
 
 declare global {
   interface Window {
@@ -71,7 +72,11 @@ const DiskList = () => {
     <div className="flex-1 flex flex-col">
       <div className="text-white flex-1">
         {disks.map((disk: any) => (
-          <DiskItem key={disk.sMountPoint} disk={disk}></DiskItem>
+          <DiskItem
+            key={disk.sMountPoint}
+            disk={disk}
+            hasScan={hasCachedScan(disk.sMountPoint)}
+          ></DiskItem>
         ))}
         <div
           className="text-white p-4 flex gap-4 items-center hover:bg-gray-800 cursor-pointer"
