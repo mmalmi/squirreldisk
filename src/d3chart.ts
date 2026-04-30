@@ -31,6 +31,35 @@ const arcVisible = (d: D3HierarchyDiskItemArc) => {
   return d.y1 <= 4 && d.y0 >= 1 && d.x1 > d.x0;
 };
 
+const formatNodePath = (node: D3HierarchyDiskItem) => {
+  const names = node
+    .ancestors()
+    .map((ancestor) => ancestor.data.name)
+    .reverse()
+    .filter(Boolean);
+
+  if (names.length === 0) {
+    return "";
+  }
+
+  const [rootName, ...childNames] = names;
+  const root = rootName === "/" ? "" : rootName.replace(/\/+$/, "");
+  const path = [root, ...childNames.map((name) => name.replace(/^\/+/, ""))]
+    .filter(Boolean)
+    .join("/");
+
+  if (rootName === "/" || rootName.startsWith("/")) {
+    return path ? `/${path.replace(/^\/+/, "")}` : "/";
+  }
+
+  return path || rootName;
+};
+
+const titleText = (node: D3HierarchyDiskItem, mul: number) =>
+  `${formatNodePath(node)}\n${((node.data.size || 0) / mul / mul / mul).toFixed(
+    2
+  )} GB`;
+
 // const setTargetAngles = (
 //   root: D3HierarchyDiskItem,
 //   focusedNode: D3HierarchyDiskItem
@@ -215,25 +244,18 @@ const updateData = (
           .on("click", arcClickHandler)
           .on("mouseover", (e, p) => hoverHandler(e, p));
         // Add Title
-        xx.append("title").text(
-          (d) =>
-            `${d
-              .ancestors()
-              .map((d) => d.data.name)
-              .reverse()
-              .join("/")}\n${((d.data.size || 0) / mul / mul / mul).toFixed(
-              2
-            )} GB`
-        );
+        xx.append("title").text((d) => titleText(d, mul));
         return xx;
       },
-      (update) =>
-        update
+      (update) => {
+        update.select("title").text((d) => titleText(d, mul));
+        return update
           .attr("fill", getChartColor)
           .attr("fill-opacity", (d) =>
             arcVisible(d.current) ? (d.children ? 0.88 : 0.74) : 0
           )
-          .attr("d", (d) => arc(d.current))
+          .attr("d", (d) => arc(d.current));
+      }
     );
 
   return path;
