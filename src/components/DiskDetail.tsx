@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import diskIcon from "../assets/harddisk.png";
 import { getChart } from "../d3chart";
 import * as d3 from "d3";
+import prettyBytes from "pretty-bytes";
 import {
   buildPath,
   getViewNode,
@@ -20,6 +21,34 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { remove } from "@tauri-apps/plugin-fs";
 
 (window as any).LockDNDEdgeScrolling = () => true;
+
+interface ScanStatus {
+  items: number;
+  total: number;
+  errors: number;
+}
+
+const formatElapsed = (seconds: number) => {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.floor(seconds % 60);
+
+  if (minutes === 0) {
+    return `${remainingSeconds}s`;
+  }
+
+  return `${minutes}m ${remainingSeconds.toString().padStart(2, "0")}s`;
+};
+
+const formatScanRate = (bytes: number, seconds: number) => {
+  if (bytes <= 0 || seconds <= 0) {
+    return "0 B/s";
+  }
+
+  return `${prettyBytes(bytes / seconds)}/s`;
+};
+
+const formatProgressPercent = (percent: number) =>
+  `${percent < 10 ? percent.toFixed(1) : percent.toFixed(0)}%`;
 
 const Scanning = () => {
   let {
@@ -44,7 +73,9 @@ const Scanning = () => {
   const d3Chart = useRef(null) as any;
   const [view, setView] = useState("loading");
   const [bytesProcessed, setByteProcessed] = useState(0);
-  const [status, setStatus]: any = useState();
+  const [status, setStatus] = useState<ScanStatus>();
+  const scanStartedAt = useRef(performance.now());
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [deleteState, setDeleteState] = useState({
     isDeleting: false,
     total: 0,
@@ -59,10 +90,16 @@ const Scanning = () => {
       // Skip if already loaded data
       return;
     }
+    scanStartedAt.current = performance.now();
+    const timer = window.setInterval(() => {
+      setElapsedSeconds((performance.now() - scanStartedAt.current) / 1000);
+    }, 500);
+
     const unlisten = listen("scan_status", (event: any) => {
       // event.event is the event name (useful if you want to use a single callback fn for multiple event types)
       // event.payload is the payload object
-      setStatus(event.payload);
+      setStatus(event.payload as ScanStatus);
+      setElapsedSeconds((performance.now() - scanStartedAt.current) / 1000);
     });
 
     const unlisten2 = listen("scan_completed", (event: any) => {
@@ -102,6 +139,7 @@ const Scanning = () => {
     //   }
     // };
     return () => {
+      window.clearInterval(timer);
       unlisten.then((f) => f());
       unlisten2.then((f) => f());
       invoke("stop_scanning", { path: disk });
@@ -143,21 +181,73 @@ const Scanning = () => {
       });
     }
   }, [view]);
-  const mul = window.OS_TYPE === "windows" ? 1024 : 1000;
+  const expectedTotal = typeof used === "number" && used > 0 ? used : 0;
+  const progressPercent =
+    status && expectedTotal > 0
+      ? Math.min((status.total / expectedTotal) * 100, 99.9)
+      : null;
+  const scanRate = status ? formatScanRate(status.total, elapsedSeconds) : "0 B/s";
   return (
     <>
       {view == "loading" && status && (
         <div className="flex-1 flex flex-col justify-center items-center justify-items-center">
           <img src={diskIcon} className="w-16 h-16"></img>
-          <div className="w-2/3">
+          <div className="w-2/3 max-w-xl">
             <div className="mt-5 mb-1 text-base text-center font-medium text-white">
               Scanning {disk}
             </div>
-            <div className="mt-1 mb-3 text-sm text-center text-gray-400">
-              {status.items.toLocaleString()} files &mdash; {(status.total / mul / mul / mul).toFixed(2)} GB
+            {progressPercent !== null && (
+              <div className="mt-4">
+                <div className="mb-1 flex items-center justify-between text-xs text-gray-400">
+                  <span>Progress</span>
+                  <span>{formatProgressPercent(progressPercent)}</span>
+                </div>
+                <div className="h-2 w-full rounded-full bg-gray-800">
+                  <div
+                    className="h-2 rounded-full bg-blue-500 transition-[width] duration-300 ease-out"
+                    style={{ width: `${progressPercent}%` }}
+                  />
+                </div>
+              </div>
+            )}
+            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div className="rounded-md bg-gray-900/70 px-3 py-2">
+                <div className="text-[10px] text-gray-500">
+                  Items
+                </div>
+                <div className="mt-1 text-sm font-medium text-white">
+                  {status.items.toLocaleString()}
+                </div>
+              </div>
+              <div className="rounded-md bg-gray-900/70 px-3 py-2">
+                <div className="text-[10px] text-gray-500">
+                  Size
+                </div>
+                <div className="mt-1 text-sm font-medium text-white">
+                  {prettyBytes(status.total)}
+                </div>
+              </div>
+              <div className="rounded-md bg-gray-900/70 px-3 py-2">
+                <div className="text-[10px] text-gray-500">
+                  Time
+                </div>
+                <div className="mt-1 text-sm font-medium text-white">
+                  {formatElapsed(elapsedSeconds)}
+                </div>
+              </div>
+              <div className="rounded-md bg-gray-900/70 px-3 py-2">
+                <div className="text-[10px] text-gray-500">
+                  Rate
+                </div>
+                <div className="mt-1 text-sm font-medium text-white">
+                  {scanRate}
+                </div>
+              </div>
             </div>
-            <div className="scan-progress-track">
-              <div className="scan-progress-bar" />
+            <div className="mt-3 text-center text-xs text-gray-500">
+              {status.errors > 0
+                ? `${status.errors.toLocaleString()} inaccessible items`
+                : "No access errors"}
             </div>
           </div>
           <button
