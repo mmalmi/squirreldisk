@@ -24,6 +24,9 @@ const makeGroupNode = (name: string) => ({
   children: [],
 });
 
+const startsWithParts = (parts: Array<string>, prefix: Array<string>) =>
+  prefix.every((part, index) => parts[index] === part);
+
 const insertAbsoluteChild = (parent: any, parts: Array<string>, node: any) => {
   if (parts.length === 0) {
     return;
@@ -50,22 +53,29 @@ const insertAbsoluteChild = (parent: any, parts: Array<string>, node: any) => {
   parent.value = parent.size;
 };
 
-export const groupRootChildrenByTopLevelPath = (root: any) => {
+export const groupChildrenByBasePath = (root: any, basePath = "/") => {
   if (!root || !Array.isArray(root.children)) {
     return root;
   }
 
-  const groupedRoot = {
+  const baseParts = pathParts(basePath);
+  const groupedRoot: any = {
     ...root,
+    name: basePath || root.name,
     size: 0,
     value: 0,
     children: [],
   };
 
   root.children.forEach((child: any) => {
-    const parts = pathParts(child.name || "");
+    const childParts = pathParts(child.name || "");
+    const relativeParts = startsWithParts(childParts, baseParts)
+      ? childParts.slice(baseParts.length)
+      : childParts;
+    const parts = relativeParts.length > 0 ? relativeParts : childParts;
+
     if (parts.length <= 1) {
-      groupedRoot.children.push(child);
+      groupedRoot.children.push(cloneWithName(child, parts[0] || child.name));
       groupedRoot.size += child.size || 0;
       groupedRoot.value = groupedRoot.size;
       return;
@@ -77,6 +87,9 @@ export const groupRootChildrenByTopLevelPath = (root: any) => {
   groupedRoot.children.sort((a: any, b: any) => (b.size || 0) - (a.size || 0));
   return groupedRoot;
 };
+
+export const groupRootChildrenByTopLevelPath = (root: any) =>
+  groupChildrenByBasePath(root, "/");
 
 export const itemMap = (obj: any, parent: any = null) => {
   if (obj.name === "(total)") {

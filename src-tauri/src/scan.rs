@@ -9,11 +9,47 @@ use tauri_plugin_shell::ShellExt;
 
 use crate::MyState;
 
+const ROOT_SCAN_BANNED_PATHS: [&str; 7] = [
+    "/dev", "/mnt", "/cdrom", "/proc", "/media", "/Volumes", "/System",
+];
+
 #[cfg(target_os = "macos")]
-fn add_home_children_skipping_cloud_dirs(home_dir: &Path, paths: &mut Vec<String>) {
+const MACOS_CLOUD_LIBRARY_DIRS: [&str; 2] = ["Mobile Documents", "CloudStorage"];
+
+fn push_path_arg(path: &Path, paths: &mut Vec<String>) {
+    paths.push(path.display().to_string());
+}
+
+#[cfg(target_os = "macos")]
+fn is_macos_cloud_library_entry(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .map(|name| MACOS_CLOUD_LIBRARY_DIRS.contains(&name))
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn add_library_children_skipping_cloud_dirs(library_dir: &Path, paths: &mut Vec<String>) -> bool {
+    let initial_len = paths.len();
+    let entries = match fs::read_dir(library_dir) {
+        Ok(entries) => entries,
+        Err(_) => return false,
+    };
+
+    for entry in entries.flatten() {
+        if !is_macos_cloud_library_entry(&entry.file_name()) {
+            push_path_arg(&entry.path(), paths);
+        }
+    }
+
+    paths.len() > initial_len
+}
+
+#[cfg(target_os = "macos")]
+fn add_home_children_skipping_cloud_dirs(home_dir: &Path, paths: &mut Vec<String>) -> bool {
+    let initial_len = paths.len();
     let entries = match fs::read_dir(home_dir) {
         Ok(entries) => entries,
-        Err(_) => return,
+        Err(_) => return false,
     };
 
     for entry in entries.flatten() {
@@ -21,21 +57,48 @@ fn add_home_children_skipping_cloud_dirs(home_dir: &Path, paths: &mut Vec<String
         let name = entry.file_name();
 
         if name == "Library" && entry_path.is_dir() {
-            let library_entries = match fs::read_dir(&entry_path) {
-                Ok(entries) => entries,
-                Err(_) => continue,
-            };
-
-            for library_entry in library_entries.flatten() {
-                let library_name = library_entry.file_name();
-                if library_name != "Mobile Documents" && library_name != "CloudStorage" {
-                    paths.push(library_entry.path().display().to_string());
-                }
-            }
+            add_library_children_skipping_cloud_dirs(&entry_path, paths);
         } else {
-            paths.push(entry_path.display().to_string());
+            push_path_arg(&entry_path, paths);
         }
     }
+
+    paths.len() > initial_len
+}
+
+#[cfg(target_os = "macos")]
+fn add_user_homes_skipping_cloud_dirs(users_dir: &Path, paths: &mut Vec<String>) -> bool {
+    let initial_len = paths.len();
+    let users = match fs::read_dir(users_dir) {
+        Ok(users) => users,
+        Err(_) => return false,
+    };
+
+    for user_entry in users.flatten() {
+        let user_path = user_entry.path();
+        if user_path.is_dir() && !add_home_children_skipping_cloud_dirs(&user_path, paths) {
+            push_path_arg(&user_path, paths);
+        }
+    }
+
+    paths.len() > initial_len
+}
+
+#[cfg(target_os = "macos")]
+fn add_macos_targets_skipping_cloud_dirs(path: &Path, paths: &mut Vec<String>) -> bool {
+    if path == Path::new("/Users") {
+        return add_user_homes_skipping_cloud_dirs(path, paths);
+    }
+
+    if path.parent() == Some(Path::new("/Users")) {
+        return add_home_children_skipping_cloud_dirs(path, paths);
+    }
+
+    if path.file_name().map_or(false, |name| name == "Library") {
+        return add_library_children_skipping_cloud_dirs(path, paths);
+    }
+
+    false
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -59,45 +122,59 @@ pub fn start(
     paths_to_scan.push("--json-output".to_string());
     paths_to_scan.push("--progress".to_string());
     paths_to_scan.push("--deduplicate-hardlinks".to_string());
+    paths_to_scan.push("--omit-json-shared-details".to_string());
+    paths_to_scan.push("--omit-json-shared-summary".to_string());
+    paths_to_scan.push("--threads=max".to_string());
     paths_to_scan.push(ratio);
 
     if path.eq("/") {
-        let paths = fs::read_dir("/").unwrap();
-        println!("{:#?}", paths);
-        let banned = [
-            "/dev", "/mnt", "/cdrom", "/proc", "/media", "/Volumes", "/System",
-        ];
+        let paths = fs::read_dir("/").map_err(|_| ())?;
 
         for scan_path in paths {
-            let scan_path_str = scan_path.unwrap().path();
-            let path_str = scan_path_str.to_str().unwrap();
-            if banned.contains(&path_str) {
+            let scan_path_str = match scan_path {
+                Ok(scan_path) => scan_path.path(),
+                Err(_) => continue,
+            };
+            let path_str = scan_path_str.to_string_lossy();
+            if ROOT_SCAN_BANNED_PATHS.contains(&path_str.as_ref()) {
                 continue;
             }
 
             #[cfg(target_os = "macos")]
             {
                 if path_str == "/Users" {
-                    if let Ok(users) = fs::read_dir("/Users") {
-                        for user_entry in users.flatten() {
-                            let user_path = user_entry.path();
-                            if user_path.is_dir() {
-                                add_home_children_skipping_cloud_dirs(
-                                    &user_path,
-                                    &mut paths_to_scan,
-                                );
-                            }
-                        }
+                    if !add_user_homes_skipping_cloud_dirs(Path::new("/Users"), &mut paths_to_scan)
+                    {
+                        push_path_arg(&scan_path_str, &mut paths_to_scan);
                     }
                     continue;
                 }
             }
 
-            paths_to_scan.push(scan_path_str.display().to_string());
+            push_path_arg(&scan_path_str, &mut paths_to_scan);
         }
     } else {
+        #[cfg(target_os = "macos")]
+        {
+            if !add_macos_targets_skipping_cloud_dirs(Path::new(&path), &mut paths_to_scan) {
+                paths_to_scan.push(path);
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
         paths_to_scan.push(path);
     }
+
+    app_handle
+        .emit(
+            "scan_status",
+            Payload {
+                items: 0,
+                total: 0,
+                errors: 0,
+            },
+        )
+        .ok();
 
     let pdu_command = app_handle
         .shell()
@@ -139,7 +216,7 @@ pub fn start(
                     // app_handle.unlisten(id);
                     // child.kill();
                 }
-                _ => unimplemented!(),
+                _ => {}
             };
             // if let CommandEvent::Stdout(line) = event {
             //     println!("StdErr: {}", line);
@@ -246,14 +323,9 @@ pub fn start(
 }
 
 pub fn stop(state: tauri::State<'_, MyState>) {
-    state
-        .0
-        .lock()
-        .unwrap()
-        .take()
-        .unwrap()
-        .kill()
-        .expect("State is None");
+    if let Some(child) = state.0.lock().unwrap().take() {
+        let _ = child.kill();
+    }
 }
 
 fn emit_scan_status(app_handle: &tauri::AppHandle, groups: Captures) {
