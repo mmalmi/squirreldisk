@@ -152,8 +152,8 @@ const Scanning = () => {
             <div className="mt-1 mb-3 text-sm text-center text-gray-400">
               {status.items.toLocaleString()} files &mdash; {(status.total / mul / mul / mul).toFixed(2)} GB
             </div>
-            <div className="w-full bg-gray-700 rounded-full h-3 overflow-hidden">
-              <div className="bg-blue-600 h-3 rounded-full w-full progress-shimmer" />
+            <div className="scan-progress-track">
+              <div className="scan-progress-bar" />
             </div>
           </div>
           <button

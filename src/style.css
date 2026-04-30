@@ -2,21 +2,43 @@
 @tailwind components;
 @tailwind utilities;
 
-@keyframes shimmer {
-  0%   { transform: translateX(-100%); }
-  100% { transform: translateX(200%); }
+@keyframes scan-progress {
+  0% {
+    transform: translateX(-45%);
+  }
+  100% {
+    transform: translateX(245%);
+  }
 }
-.progress-shimmer {
-  position: relative;
+
+.scan-progress-track {
+  width: 100%;
+  height: 12px;
   overflow: hidden;
+  border-radius: 9999px;
+  background: rgba(55, 65, 81, 0.95);
+  position: relative;
 }
-.progress-shimmer::after {
+
+.scan-progress-bar {
+  width: 34%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #5b8cff 0%, #2563eb 55%, #60a5fa 100%);
+  animation: scan-progress 1.35s ease-in-out infinite;
+  position: relative;
+}
+
+.scan-progress-bar::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.45) 50%, transparent 100%);
-  width: 50%;
-  animation: shimmer 1.2s ease-in-out infinite;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.45) 50%,
+    transparent 100%
+  );
 }
 
 html {
