@@ -8,7 +8,8 @@ mod snapshots;
 mod window_style;
 
 use serde::Serialize;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use sysinfo::{DiskExt, System, SystemExt};
@@ -18,9 +19,6 @@ use tauri_plugin_shell::process::CommandChild;
 #[cfg(target_os = "macos")]
 use window_vibrancy::NSVisualEffectMaterial;
 
-#[cfg(target_os = "linux")]
-use {std::fs::metadata, std::path::PathBuf};
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SquirrelDisk<'a> {
@@ -29,6 +27,12 @@ struct SquirrelDisk<'a> {
     total_space: u64,
     available_space: u64,
     is_removable: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteOutcome {
+    deleted_bytes: u64,
 }
 
 fn main() {
@@ -69,7 +73,7 @@ fn main() {
             start_scanning,
             stop_scanning,
             show_in_folder,
-            move_to_trash,
+            delete_permanently,
             open_full_disk_access_settings,
             snapshots::get_scan_snapshot,
             snapshots::list_scan_snapshots,
@@ -94,98 +98,94 @@ fn open_full_disk_access_settings() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn move_to_trash(path: String) -> Result<(), String> {
+fn delete_permanently(path: String) -> Result<DeleteOutcome, String> {
     if path.trim().is_empty() {
         return Err("Path is empty".to_string());
     }
 
-    if !Path::new(&path).exists() {
-        return Err("Path no longer exists".to_string());
+    delete_permanently_at_path(&PathBuf::from(path))
+}
+
+fn delete_permanently_at_path(path: &Path) -> Result<DeleteOutcome, String> {
+    if let Some(reason) = deletion_protection_reason(path) {
+        return Err(reason);
     }
 
-    trash_path(&path)
-}
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    let deleted_bytes = measured_delete_bytes(path).unwrap_or(0);
 
-#[cfg(target_os = "macos")]
-fn trash_path(path: &str) -> Result<(), String> {
-    let script = format!(
-        "tell application \"Finder\" to delete POSIX file {}",
-        apple_script_string(path)
-    );
-    let output = Command::new("osascript")
-        .args(["-e", &script])
-        .output()
-        .map_err(|error| error.to_string())?;
-
-    command_result(output, "Finder could not move the item to Trash")
-}
-
-#[cfg(target_os = "macos")]
-fn apple_script_string(value: &str) -> String {
-    let mut escaped = String::from("\"");
-
-    for ch in value.chars() {
-        match ch {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            _ => escaped.push(ch),
-        }
-    }
-
-    escaped.push('"');
-    escaped
-}
-
-#[cfg(target_os = "linux")]
-fn trash_path(path: &str) -> Result<(), String> {
-    let output = Command::new("gio")
-        .args(["trash", path])
-        .output()
-        .map_err(|error| error.to_string())?;
-
-    command_result(output, "gio could not move the item to Trash")
-}
-
-#[cfg(target_os = "windows")]
-fn trash_path(path: &str) -> Result<(), String> {
-    let escaped = path.replace('\'', "''");
-    let script = format!(
-        r#"
-Add-Type -AssemblyName Microsoft.VisualBasic
-$path = '{}'
-if (Test-Path -LiteralPath $path -PathType Container) {{
-  [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($path, 'OnlyErrorDialogs', 'SendToRecycleBin')
-}} else {{
-  [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($path, 'OnlyErrorDialogs', 'SendToRecycleBin')
-}}
-"#,
-        escaped
-    );
-
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .output()
-        .map_err(|error| error.to_string())?;
-
-    command_result(output, "Windows could not move the item to Recycle Bin")
-}
-
-fn command_result(output: std::process::Output, fallback: &str) -> Result<(), String> {
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-
-    if !stderr.is_empty() {
-        Err(stderr)
-    } else if !stdout.is_empty() {
-        Err(stdout)
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        fs::remove_dir_all(path).map_err(|error| error.to_string())?;
     } else {
-        Err(fallback.to_string())
+        fs::remove_file(path).map_err(|error| error.to_string())?;
+    }
+
+    Ok(DeleteOutcome { deleted_bytes })
+}
+
+fn deletion_protection_reason(path: &Path) -> Option<String> {
+    if !path.is_absolute() {
+        return Some("Only absolute scanned paths can be deleted".to_string());
+    }
+
+    if path.parent().is_none() {
+        return Some("Refusing to delete a filesystem root".to_string());
+    }
+
+    let normalized = normalized_path_text(path);
+    let protected_exact = [
+        "/",
+        "/Applications",
+        "/Library",
+        "/System",
+        "/Users",
+        "/Volumes",
+        "/bin",
+        "/dev",
+        "/etc",
+        "/private",
+        "/sbin",
+        "/usr",
+        "/var",
+    ];
+
+    if protected_exact.contains(&normalized.as_str()) {
+        return Some(format!("Refusing to delete protected path {normalized}"));
+    }
+
+    if std::env::var("HOME")
+        .ok()
+        .map(|home| normalized == normalized_path_text(Path::new(&home)))
+        .unwrap_or(false)
+    {
+        return Some("Refusing to delete the home directory itself".to_string());
+    }
+
+    None
+}
+
+fn normalized_path_text(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('\\', "/");
+    let trimmed = text.trim_end_matches('/');
+
+    if trimmed.is_empty() {
+        "/".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn measured_delete_bytes(path: &Path) -> std::io::Result<u64> {
+    let metadata = fs::symlink_metadata(path)?;
+
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        let mut total = 0;
+        for entry in fs::read_dir(path)? {
+            total += measured_delete_bytes(&entry?.path()).unwrap_or(0);
+        }
+        Ok(total)
+    } else {
+        Ok(metadata.len())
     }
 }
 
@@ -207,7 +207,7 @@ fn show_in_folder(path: String) {
     {
         // if path.contains(",") {
         // see https://gitlab.freedesktop.org/dbus/dbus/-/issues/76
-        let new_path = match metadata(&path).unwrap().is_dir() {
+        let new_path = match fs::metadata(&path).unwrap().is_dir() {
             true => path,
             false => {
                 let mut path2 = PathBuf::from(path);
@@ -277,4 +277,62 @@ fn stop_scanning(
 ) -> Result<(), ()> {
     scan::stop(state);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_delete_dir(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "squirreldisk-delete-{name}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn deletion_protection_rejects_roots_and_major_system_dirs() {
+        assert!(deletion_protection_reason(Path::new("/")).is_some());
+        assert!(deletion_protection_reason(Path::new("/System")).is_some());
+        assert!(deletion_protection_reason(Path::new("/Users")).is_some());
+        assert!(deletion_protection_reason(Path::new("/tmp/squirreldisk-file")).is_none());
+    }
+
+    #[test]
+    fn delete_permanently_removes_files_and_reports_bytes() {
+        let dir = temp_delete_dir("file");
+        let file_path = dir.join("large.tmp");
+        let mut file = fs::File::create(&file_path).unwrap();
+        file.write_all(&[7_u8; 4096]).unwrap();
+        drop(file);
+
+        let outcome = delete_permanently_at_path(&file_path).unwrap();
+
+        assert!(!file_path.exists());
+        assert_eq!(outcome.deleted_bytes, 4096);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn delete_permanently_removes_directories_recursively() {
+        let dir = temp_delete_dir("directory");
+        let target = dir.join("collected");
+        fs::create_dir_all(target.join("nested")).unwrap();
+        fs::write(target.join("a.bin"), &[1_u8; 200]).unwrap();
+        fs::write(target.join("nested/b.bin"), &[2_u8; 300]).unwrap();
+
+        let outcome = delete_permanently_at_path(&target).unwrap();
+
+        assert!(!target.exists());
+        assert_eq!(outcome.deleted_bytes, 500);
+        fs::remove_dir_all(dir).unwrap();
+    }
 }

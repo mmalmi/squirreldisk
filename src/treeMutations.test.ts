@@ -46,7 +46,7 @@ const makeTree = (): DiskItem => ({
 });
 
 describe("removeNodesFromTree", () => {
-  it("removes confirmed trash moves and recalculates ancestor sizes", () => {
+  it("removes confirmed deletions and recalculates ancestor sizes", () => {
     const original = makeTree();
     const result = removeNodesFromTree(original, new Set(["/Users/a.mov"]));
 

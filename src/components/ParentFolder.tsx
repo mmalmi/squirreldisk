@@ -3,10 +3,12 @@ import { buildFullPath } from "../pruneData";
 interface ParentFolderProps {
   focusedDirectory: D3HierarchyDiskItem;
   d3Chart: any;
+  isPreview?: boolean;
 }
 export const ParentFolder = ({
   focusedDirectory,
   d3Chart,
+  isPreview = false,
 }: ParentFolderProps) => {
   const mul = window.OS_TYPE === "windows" ? 1024 : 1000;
   return (
@@ -17,8 +19,11 @@ export const ParentFolder = ({
         invoke("show_in_folder", { path: buildFullPath(focusedDirectory) });
       }}
       onClick={() => {
-        if (focusedDirectory.parent)
+        if (isPreview) {
+          d3Chart.current.focusDirectory(focusedDirectory);
+        } else if (focusedDirectory.parent) {
           d3Chart.current.backToParent(focusedDirectory.parent);
+        }
         /*window.electron.diskUtils.openPath(buildFullPath(focusedDirectory));*/
       }}
     >

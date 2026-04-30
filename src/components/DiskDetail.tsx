@@ -16,6 +16,7 @@ import { ParentFolder } from "./ParentFolder";
 import { DragDropContext, Droppable } from "react-beautiful-dnd";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { getChartColor } from "../chartColors";
 import { getCachedScan, setCachedScan } from "../scanCache";
 import { formatScannedAt } from "../scanTime";
@@ -38,22 +39,35 @@ interface DeleteFailure {
 
 interface DeleteState {
   isDeleting: boolean;
+  isCountingDown: boolean;
+  countdown: number | null;
   total: number;
   current: number;
-  movedBytes: number;
+  recoveredBytes: number;
   failures: Array<DeleteFailure>;
 }
 
 const emptyDeleteState: DeleteState = {
   isDeleting: false,
+  isCountingDown: false,
+  countdown: null,
   total: 0,
   current: 0,
-  movedBytes: 0,
+  recoveredBytes: 0,
   failures: [],
 };
 
+interface DeleteOutcome {
+  deletedBytes: number;
+}
+
+const DELETE_COUNTDOWN_SECONDS = 5;
+
 const normalizeNodePath = (node: D3HierarchyDiskItem) =>
   buildFullPath(node).replace(/\\/g, "/");
+
+const wait = (ms: number) =>
+  new Promise((resolve) => window.setTimeout(resolve, ms));
 
 const formatElapsed = (seconds: number) => {
   const minutes = Math.floor(seconds / 60);
@@ -114,6 +128,7 @@ const Scanning = () => {
 
   const [deleteList, setDeleteList] = useState<Array<D3HierarchyDiskItem>>([]);
   const deleteMap = useRef<Map<string, boolean>>(new Map());
+  const cancelDeleteRef = useRef(false);
   const updateScannedAt = (value: number | null) => {
     scannedAtRef.current = value;
     setScannedAt(value);
@@ -283,6 +298,7 @@ const Scanning = () => {
   const scanRate = status ? formatScanRate(status.total, elapsedSeconds) : "0 B/s";
   const scannedAtText = formatScannedAt(scannedAt);
   const listedDirectory = previewDirectory || focusedDirectory;
+  const isPreviewingDirectory = !!previewDirectory;
   const selectedDeleteBytes = deleteList.reduce(
     (sum, node) => sum + (node.data.size || 0),
     0
@@ -297,29 +313,73 @@ const Scanning = () => {
   const openFullDiskAccessSettings = () => {
     invoke("open_full_disk_access_settings").catch(console.error);
   };
-  const moveSelectedToTrash = async () => {
+  const cancelPendingDelete = () => {
+    cancelDeleteRef.current = true;
+    setDeleteState(emptyDeleteState);
+  };
+  const deleteSelectedPermanently = async () => {
     if (deleteState.isDeleting || deleteList.length === 0) {
       return;
     }
 
     const selected = [...deleteList];
+    const accepted = await confirm(
+      `Permanently delete ${selected.length} item${
+        selected.length === 1 ? "" : "s"
+      } and reclaim about ${prettyBytes(selectedDeleteBytes)}? This cannot be undone.`,
+      {
+        title: "Delete permanently?",
+        kind: "warning",
+        okLabel: "Delete",
+        cancelLabel: "Cancel",
+      }
+    );
+
+    if (!accepted) {
+      return;
+    }
+
     const successful: Array<D3HierarchyDiskItem> = [];
     const failures: Array<DeleteFailure> = [];
-    let movedBytes = 0;
+    let recoveredBytes = 0;
+    cancelDeleteRef.current = false;
 
     setDeleteState({
       ...emptyDeleteState,
       isDeleting: true,
+      isCountingDown: true,
+      countdown: DELETE_COUNTDOWN_SECONDS,
       total: selected.length,
     });
+
+    for (let seconds = DELETE_COUNTDOWN_SECONDS; seconds > 0; seconds--) {
+      if (cancelDeleteRef.current) {
+        return;
+      }
+
+      setDeleteState({
+        ...emptyDeleteState,
+        isDeleting: true,
+        isCountingDown: true,
+        countdown: seconds,
+        total: selected.length,
+      });
+      await wait(1000);
+    }
+
+    if (cancelDeleteRef.current) {
+      return;
+    }
 
     for (const [index, node] of selected.entries()) {
       const nodePath = normalizeNodePath(node);
 
       try {
-        await invoke("move_to_trash", { path: nodePath });
+        const outcome = await invoke<DeleteOutcome>("delete_permanently", {
+          path: nodePath,
+        });
         successful.push(node);
-        movedBytes += node.data.size || 0;
+        recoveredBytes += outcome.deletedBytes || node.data.size || 0;
       } catch (error) {
         failures.push({
           id: node.data.id,
@@ -331,9 +391,11 @@ const Scanning = () => {
 
       setDeleteState({
         isDeleting: true,
+        isCountingDown: false,
+        countdown: null,
         total: selected.length,
         current: index + 1,
-        movedBytes,
+        recoveredBytes,
         failures: [...failures],
       });
     }
@@ -358,7 +420,7 @@ const Scanning = () => {
           await setCachedScan({
             path: disk,
             tree: baseData.current,
-            used: baseData.current.size || Math.max(used - movedBytes, 0),
+            used: baseData.current.size || Math.max(used - recoveredBytes, 0),
             errors: restrictedPathsRef.current.length,
             restrictedPaths: restrictedPathsRef.current,
             scannedAt: scannedAtRef.current || undefined,
@@ -376,9 +438,11 @@ const Scanning = () => {
     setDeleteList(survivingItems);
     setDeleteState({
       isDeleting: false,
+      isCountingDown: false,
+      countdown: null,
       total: selected.length,
       current: selected.length,
-      movedBytes,
+      recoveredBytes,
       failures,
     });
   };
@@ -490,13 +554,15 @@ const Scanning = () => {
               });
             }}
           >
-            <div className="flex flex-1">
+            <div
+              className="flex flex-1"
+              onMouseLeave={() => {
+                clearHoveredItem();
+                setPreviewDirectory(null);
+              }}
+            >
               <div
                 className="chartpartition flex-1 flex justify-items-center	items-center"
-                onMouseLeave={() => {
-                  clearHoveredItem();
-                  setPreviewDirectory(null);
-                }}
               >
                 <svg
                   ref={svgRef}
@@ -506,10 +572,11 @@ const Scanning = () => {
               </div>
 
               <div className="bg-gray-900 w-1/3 p-2 flex flex-col">
-                {focusedDirectory && (
+                {listedDirectory && (
                   <ParentFolder
-                    focusedDirectory={focusedDirectory}
+                    focusedDirectory={listedDirectory}
                     d3Chart={d3Chart}
+                    isPreview={isPreviewingDirectory}
                   ></ParentFolder>
                 )}
                 {scannedAtText && (
@@ -570,7 +637,7 @@ const Scanning = () => {
                     >
                       <div className="rounded-lg border	border-gray-500	border-dashed p-2 text-gray-500 text-center mb-0">
                         {deleteList.length == 0 && (
-                          <>Drop files and folders here to move to Trash</>
+                          <>Drop files and folders here to collect</>
                         )}
                         {deleteList.length > 0 && (
                           <div className="text-left">
@@ -586,6 +653,7 @@ const Scanning = () => {
                                 onClick={() => {
                                   setDeleteList([]);
                                   deleteMap.current.clear();
+                                  cancelDeleteRef.current = false;
                                   setDeleteState(emptyDeleteState);
                                 }}
                               >
@@ -598,18 +666,26 @@ const Scanning = () => {
                         {deleteState.isDeleting && (
                           <div className="mt-3">
                             <div className="mb-1 flex justify-between text-xs text-gray-400">
-                              <span>
-                                Moving {deleteState.current} of{" "}
-                                {deleteState.total}
-                              </span>
-                              <span>{prettyBytes(deleteState.movedBytes)}</span>
+                              {deleteState.isCountingDown ? (
+                                <span>
+                                  Deleting in {deleteState.countdown}
+                                </span>
+                              ) : (
+                                <span>
+                                  Deleting {deleteState.current} of{" "}
+                                  {deleteState.total}
+                                </span>
+                              )}
+                              <span>{prettyBytes(deleteState.recoveredBytes)}</span>
                             </div>
-                            <div className="h-1.5 w-full rounded-full bg-gray-800">
-                              <div
-                                className="h-1.5 rounded-full bg-red-500 transition-[width] duration-200"
-                                style={{ width: `${deleteProgressPercent}%` }}
-                              />
-                            </div>
+                            {!deleteState.isCountingDown && (
+                              <div className="h-1.5 w-full rounded-full bg-gray-800">
+                                <div
+                                  className="h-1.5 rounded-full bg-red-500 transition-[width] duration-200"
+                                  style={{ width: `${deleteProgressPercent}%` }}
+                                />
+                              </div>
+                            )}
                           </div>
                         )}
                         {!deleteState.isDeleting &&
@@ -631,17 +707,26 @@ const Scanning = () => {
                           )}
                         {deleteList.length > 0 && (
                           <button
-                            onClick={moveSelectedToTrash}
+                            onClick={
+                              deleteState.isCountingDown
+                                ? cancelPendingDelete
+                                : deleteSelectedPermanently
+                            }
                             type="button"
-                            disabled={deleteState.isDeleting}
+                            disabled={
+                              deleteState.isDeleting &&
+                              !deleteState.isCountingDown
+                            }
                             className="text-white w-full mt-3 bg-gradient-to-r from-red-600 via-red-700 to-red-600 hover:bg-gradient-to-br focus:ring-4 focus:ring-red-300 focus:ring-red-800 shadow-sm shadow-red-500/50 shadow-lg shadow-red-800/80 font-medium rounded-lg text-sm px-5 py-2.5 text-center mr-2 mb-2"
                           >
-                            {deleteState.isDeleting
-                              ? "Moving " +
+                            {deleteState.isCountingDown
+                              ? "Cancel"
+                              : deleteState.isDeleting
+                              ? "Deleting " +
                                 deleteState.current +
                                 " of " +
                                 deleteState.total
-                              : "Move to Trash"}
+                              : "Delete Permanently"}
                           </button>
                         )}
                       </div>
