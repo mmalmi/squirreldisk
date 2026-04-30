@@ -9,6 +9,7 @@ import {
   getViewNodeGraph,
   buildFullPath,
   diskItemToD3Hierarchy,
+  groupRootChildrenByTopLevelPath,
   itemMap,
 } from "../pruneData";
 import { FileLine } from "./FileLine";
@@ -72,7 +73,8 @@ const Scanning = () => {
         const t0 = performance.now();
         const parsed = JSON.parse(event.payload);
         console.log("[scan_completed] JSON.parse took", (performance.now() - t0).toFixed(1), "ms, has .tree:", !!parsed.tree);
-        baseData.current = parsed.tree;
+        baseData.current =
+          disk === "/" ? groupRootChildrenByTopLevelPath(parsed.tree) : parsed.tree;
         const mapped = itemMap(baseData.current);
         baseDataD3Hierarchy.current = diskItemToD3Hierarchy(mapped as any);
         setView("disk");

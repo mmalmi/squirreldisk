@@ -3,13 +3,89 @@ import * as d3 from "d3";
 import { v4 as uuidv4 } from "uuid";
 
 let genId = 0;
+
+const pathParts = (name: string) =>
+  name
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean);
+
+const cloneWithName = (node: any, name: string) => ({
+  ...node,
+  name,
+  children: node.children ? [...node.children] : [],
+});
+
+const makeGroupNode = (name: string) => ({
+  name,
+  value: 0,
+  size: 0,
+  isDirectory: true,
+  children: [],
+});
+
+const insertAbsoluteChild = (parent: any, parts: Array<string>, node: any) => {
+  if (parts.length === 0) {
+    return;
+  }
+
+  const [part, ...rest] = parts;
+  if (rest.length === 0) {
+    parent.children.push(cloneWithName(node, part));
+    parent.size += node.size || 0;
+    parent.value = parent.size;
+    return;
+  }
+
+  let group = parent.children.find(
+    (child: any) => child.name === part && child.isDirectory
+  );
+  if (!group) {
+    group = makeGroupNode(part);
+    parent.children.push(group);
+  }
+
+  insertAbsoluteChild(group, rest, node);
+  parent.size += node.size || 0;
+  parent.value = parent.size;
+};
+
+export const groupRootChildrenByTopLevelPath = (root: any) => {
+  if (!root || !Array.isArray(root.children)) {
+    return root;
+  }
+
+  const groupedRoot = {
+    ...root,
+    size: 0,
+    value: 0,
+    children: [],
+  };
+
+  root.children.forEach((child: any) => {
+    const parts = pathParts(child.name || "");
+    if (parts.length <= 1) {
+      groupedRoot.children.push(child);
+      groupedRoot.size += child.size || 0;
+      groupedRoot.value = groupedRoot.size;
+      return;
+    }
+
+    insertAbsoluteChild(groupedRoot, parts, child);
+  });
+
+  groupedRoot.children.sort((a: any, b: any) => (b.size || 0) - (a.size || 0));
+  return groupedRoot;
+};
+
 export const itemMap = (obj: any, parent: any = null) => {
   if (obj.name === "(total)") {
     obj.id = "/";
     obj.name = "/";
   } else if (parent && parent.id === "/") {
-    obj.id = obj.name;
-    obj.name = obj.name.substring(1); // remove the slash for 1st level dirs /folder
+    const hasLeadingSlash = obj.name.startsWith("/");
+    obj.id = hasLeadingSlash ? obj.name : `/${obj.name}`;
+    obj.name = hasLeadingSlash ? obj.name.substring(1) : obj.name;
   } else {
     obj.id = parent ? parent.id + "/" + obj.name : obj.name;
   }
