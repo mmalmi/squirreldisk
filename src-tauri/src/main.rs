@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use sysinfo::{DiskExt, System, SystemExt};
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use tauri::Manager;
 use tauri_plugin_shell::process::CommandChild;
 
