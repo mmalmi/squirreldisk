@@ -459,6 +459,7 @@ function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
     const pduVersion = env.SQD_PDU_VERSION || '0.23.0'
     const dockerScript = [
       'set -Eeuo pipefail',
+      '. /usr/local/cargo/env',
       'npm ci',
       `if [ ${JSON.stringify(target)} = "aarch64-unknown-linux-gnu" ] && [ ! -x src-tauri/bin/pdu-aarch64-unknown-linux-gnu ]; then`,
       `  cargo install parallel-disk-usage --version ${JSON.stringify(pduVersion)} --root /tmp/pdu-root`,
