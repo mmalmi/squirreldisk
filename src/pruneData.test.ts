@@ -48,6 +48,75 @@ describe("scan tree path shaping", () => {
     expect(JSON.stringify(mapped)).not.toContain("//Downloads");
   });
 
+  it("merges duplicate directories that resolve to the same displayed path", () => {
+    const grouped = groupChildrenByBasePath(
+      {
+        name: "(total)",
+        size: 18,
+        value: 18,
+        isDirectory: true,
+        children: [
+          {
+            name: "/Library",
+            size: 5,
+            value: 5,
+            isDirectory: true,
+            children: [
+              {
+                name: "A",
+                size: 5,
+                value: 5,
+                isDirectory: false,
+                children: [],
+              },
+            ],
+          },
+          {
+            name: "Library",
+            size: 7,
+            value: 7,
+            isDirectory: true,
+            children: [
+              {
+                name: "B",
+                size: 7,
+                value: 7,
+                isDirectory: false,
+                children: [],
+              },
+            ],
+          },
+          {
+            name: "/Library/Caches",
+            size: 6,
+            value: 6,
+            isDirectory: true,
+            children: [],
+          },
+        ],
+      },
+      "/"
+    );
+
+    const mapped = itemMap(grouped);
+    const libraries = mapped.children.filter(
+      (child: DiskItem) => child.name === "Library"
+    );
+
+    expect(libraries).toHaveLength(1);
+    expect(libraries[0].size).toBe(18);
+    expect(libraries[0].children.map((child: DiskItem) => child.name)).toEqual([
+      "B",
+      "Caches",
+      "A",
+    ]);
+    expect(libraries[0].children.map((child: DiskItem) => child.id)).toEqual([
+      "/Library/B",
+      "/Library/Caches",
+      "/Library/A",
+    ]);
+  });
+
   it("adds inaccessible folders inside the scanned tree", () => {
     const root = itemMap({
       name: "/",

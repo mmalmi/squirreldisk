@@ -9,10 +9,14 @@ const pathParts = (name: string) =>
     .split("/")
     .filter(Boolean);
 
-const cloneWithName = (node: any, name: string) => ({
+const cloneNode = (node: any): any => ({
   ...node,
+  children: Array.isArray(node.children) ? node.children.map(cloneNode) : [],
+});
+
+const cloneWithName = (node: any, name: string) => ({
+  ...cloneNode(node),
   name,
-  children: node.children ? [...node.children] : [],
 });
 
 const makeGroupNode = (name: string) => ({
@@ -22,6 +26,65 @@ const makeGroupNode = (name: string) => ({
   isDirectory: true,
   children: [],
 });
+
+const isDirectoryLike = (node: any) =>
+  !!node?.isDirectory ||
+  (Array.isArray(node?.children) && node.children.length > 0);
+
+const canMergeNodes = (left: any, right: any) =>
+  left?.name === right?.name && isDirectoryLike(left) === isDirectoryLike(right);
+
+const mergeNodeInto = (target: any, source: any) => {
+  const sourceSize = source.size || 0;
+  target.size = (target.size || 0) + sourceSize;
+  target.value = target.size;
+  target.isDirectory = isDirectoryLike(target) || isDirectoryLike(source);
+
+  if (source.restricted) {
+    target.restricted = true;
+    target.restrictedPath = source.restrictedPath;
+    target.restrictedReason = source.restrictedReason;
+  }
+
+  if (!Array.isArray(source.children) || source.children.length === 0) {
+    return;
+  }
+
+  if (!Array.isArray(target.children)) {
+    target.children = [];
+  }
+
+  source.children.forEach((sourceChild: any) => {
+    const child = cloneNode(sourceChild);
+    const existing = target.children.find((entry: any) =>
+      canMergeNodes(entry, child)
+    );
+
+    if (existing) {
+      mergeNodeInto(existing, child);
+    } else {
+      target.children.push(child);
+    }
+  });
+};
+
+const mergeChildIntoParent = (parent: any, child: any) => {
+  parent.children = parent.children || [];
+  const existing = parent.children.find((entry: any) =>
+    canMergeNodes(entry, child)
+  );
+
+  if (existing) {
+    mergeNodeInto(existing, child);
+  } else {
+    parent.children.push(child);
+  }
+};
+
+const addSizeToParent = (parent: any, size: number) => {
+  parent.size = (parent.size || 0) + size;
+  parent.value = parent.size;
+};
 
 const startsWithParts = (parts: Array<string>, prefix: Array<string>) =>
   prefix.every((part, index) => parts[index] === part);
@@ -38,9 +101,8 @@ const insertAbsoluteChild = (parent: any, parts: Array<string>, node: any) => {
 
   const [part, ...rest] = parts;
   if (rest.length === 0) {
-    parent.children.push(cloneWithName(node, part));
-    parent.size += node.size || 0;
-    parent.value = parent.size;
+    mergeChildIntoParent(parent, cloneWithName(node, part));
+    addSizeToParent(parent, node.size || 0);
     return;
   }
 
@@ -53,8 +115,7 @@ const insertAbsoluteChild = (parent: any, parts: Array<string>, node: any) => {
   }
 
   insertAbsoluteChild(group, rest, node);
-  parent.size += node.size || 0;
-  parent.value = parent.size;
+  addSizeToParent(parent, node.size || 0);
 };
 
 const sortTreeChildren = (node: any) => {
@@ -175,16 +236,18 @@ export const groupChildrenByBasePath = (root: any, basePath = "/") => {
     const parts = relativeParts.length > 0 ? relativeParts : childParts;
 
     if (parts.length <= 1) {
-      groupedRoot.children.push(cloneWithName(child, parts[0] || child.name));
-      groupedRoot.size += child.size || 0;
-      groupedRoot.value = groupedRoot.size;
+      mergeChildIntoParent(
+        groupedRoot,
+        cloneWithName(child, parts[0] || child.name)
+      );
+      addSizeToParent(groupedRoot, child.size || 0);
       return;
     }
 
     insertAbsoluteChild(groupedRoot, parts, child);
   });
 
-  groupedRoot.children.sort((a: any, b: any) => (b.size || 0) - (a.size || 0));
+  sortTreeChildren(groupedRoot);
   return groupedRoot;
 };
 

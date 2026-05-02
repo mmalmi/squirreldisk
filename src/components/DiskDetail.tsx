@@ -107,8 +107,6 @@ const Scanning = () => {
   // Current Directory
   const [focusedDirectory, setFocusedDirectory] =
     useState<D3HierarchyDiskItem | null>(null);
-  const [previewDirectory, setPreviewDirectory] =
-    useState<D3HierarchyDiskItem | null>(null);
   // Hovered Item
   const [hoveredItem, setHoveredItem] = useState<DiskItem | null>(null);
 
@@ -275,16 +273,13 @@ const Scanning = () => {
         centerHover: (_, p) => {
           // console.log({centerHover: p})
           setHoveredItem({ ...p.data });
-          setPreviewDirectory(null);
         },
         arcHover: (_, p) => {
           // console.log({arcHover: p})
           setHoveredItem({ ...p.data });
-          setPreviewDirectory(p.children ? p : null);
         },
         arcClicked: (_, p) => {
           setFocusedDirectory(p);
-          setPreviewDirectory(null);
           return p;
         },
       });
@@ -297,8 +292,7 @@ const Scanning = () => {
       : null;
   const scanRate = status ? formatScanRate(status.total, elapsedSeconds) : "0 B/s";
   const scannedAtText = formatScannedAt(scannedAt);
-  const listedDirectory = previewDirectory || focusedDirectory;
-  const isPreviewingDirectory = !!previewDirectory;
+  const listedDirectory = focusedDirectory;
   const selectedDeleteBytes = deleteList.reduce(
     (sum, node) => sum + (node.data.size || 0),
     0
@@ -413,7 +407,6 @@ const Scanning = () => {
 
       d3Chart.current.deleteNodes(successful);
       clearHoveredItem();
-      setPreviewDirectory(null);
 
       if (baseData.current) {
         try {
@@ -540,14 +533,17 @@ const Scanning = () => {
               if (result.destination?.droppableId !== "deletelist") {
                 return;
               }
-              const item = focusedDirectory!.children!.find(
+              const item = focusedDirectory?.children?.find(
                 (i) => i.data.id === result.draggableId,
               );
+              if (!item) {
+                return;
+              }
               setDeleteList((val) => {
-                if (!val.find((e) => e.data.id === item!.data.id)) {
-                  deleteMap.current.set(item!.data.id, true);
+                if (!val.find((e) => e.data.id === item.data.id)) {
+                  deleteMap.current.set(item.data.id, true);
 
-                  return [...val, item!];
+                  return [...val, item];
                 } else {
                   return val;
                 }
@@ -558,7 +554,6 @@ const Scanning = () => {
               className="flex flex-1"
               onMouseLeave={() => {
                 clearHoveredItem();
-                setPreviewDirectory(null);
               }}
             >
               <div
@@ -576,7 +571,6 @@ const Scanning = () => {
                   <ParentFolder
                     focusedDirectory={listedDirectory}
                     d3Chart={d3Chart}
-                    isPreview={isPreviewingDirectory}
                   ></ParentFolder>
                 )}
                 {scannedAtText && (
