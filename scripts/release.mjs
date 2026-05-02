@@ -38,6 +38,7 @@ Options:
   --dry-run                 Print the plan without running build or publish commands
   --skip-verify            Skip npm/cargo verification
   --allow-dirty            Allow releasing from a dirty git tree
+  --allow-partial          Publish even if a platform build fails
   --tag <tag>              Release tag (defaults to src-tauri/tauri.conf.json version)
   --release-tree <name>    htree release tree name (default: releases/squirreldisk)
   --owner-npub <npub>      Owner npub for the printed git.iris.to release URL
@@ -51,8 +52,11 @@ Environment:
   SQD_RELEASE_TREE
   SQD_RELEASE_OWNER_NPUB
   SQD_RELEASE_ALLOW_DIRTY
+  SQD_RELEASE_ALLOW_PARTIAL
   SQD_MACOS_TARGET         Default: host macOS architecture
-  SQD_LINUX_DOCKER_IMAGE   Default: squirreldisk-tauri-linux-release:local
+  SQD_LINUX_TARGET         Default: host Linux architecture in Docker
+  SQD_LINUX_DOCKER_IMAGE   Default: squirreldisk-tauri-linux-release:<arch>
+  SQD_PDU_VERSION          Default: 0.23.0
   SQD_WINDOWS_VM_NAME
   SQD_WINDOWS_SHARED_REPO_PATH
 `)
@@ -83,6 +87,7 @@ function parseArgs(argv) {
     dryRun: false,
     skipVerify: false,
     allowDirty: false,
+    allowPartial: false,
     tag: null,
     releaseTree: null,
     ownerNpub: null,
@@ -111,6 +116,9 @@ function parseArgs(argv) {
         break
       case '--allow-dirty':
         options.allowDirty = true
+        break
+      case '--allow-partial':
+        options.allowPartial = true
         break
       case '--tag':
         options.tag = normalizeTag(argv[++index] ?? '')
@@ -339,7 +347,19 @@ function buildMacosArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
   return assets
 }
 
-function linuxDockerfile() {
+function defaultLinuxTarget(env) {
+  if (env.SQD_LINUX_TARGET) {
+    return env.SQD_LINUX_TARGET
+  }
+  return process.arch === 'arm64' ? 'aarch64-unknown-linux-gnu' : 'x86_64-unknown-linux-gnu'
+}
+
+function linuxDockerPlatform(target) {
+  if (target.startsWith('aarch64-')) return 'linux/arm64'
+  return 'linux/amd64'
+}
+
+function linuxDockerfile(target) {
   return `FROM node:22-bookworm
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \\
@@ -361,14 +381,14 @@ ENV CARGO_HOME=/usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV PATH=/usr/local/cargo/bin:$PATH
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain stable \\
-  && rustup target add x86_64-unknown-linux-gnu \\
+  && rustup target add ${target} \\
   && chmod -R a+rwx /usr/local/cargo /usr/local/rustup
 `
 }
 
-function ensureLinuxDockerImage({ env, dryRun }) {
-  const image = env.SQD_LINUX_DOCKER_IMAGE || 'squirreldisk-tauri-linux-release:local'
-  runWithInput('docker', ['build', '--platform', 'linux/amd64', '-t', image, '-'], linuxDockerfile(), {
+function ensureLinuxDockerImage({ env, target, platform, dryRun }) {
+  const image = env.SQD_LINUX_DOCKER_IMAGE || `squirreldisk-tauri-linux-release:${archLabel(target)}`
+  runWithInput('docker', ['build', '--platform', platform, '-t', image, '-'], linuxDockerfile(target), {
     cwd: repoRoot,
     dryRun,
   })
@@ -392,22 +412,25 @@ function removeWorktree(path, { dryRun }) {
 }
 
 function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
+  const target = defaultLinuxTarget(env)
+  const arch = archLabel(target)
+
   if (process.platform === 'linux') {
     let buildError = null
     try {
-      run('npm', ['run', 'tauri', '--', 'build', '--target', 'x86_64-unknown-linux-gnu', '--ci'], {
+      run('npm', ['run', 'tauri', '--', 'build', '--target', target, '--ci'], {
         dryRun,
       })
     } catch (error) {
       buildError = error
     }
-    const targetDir = join(cargoTargetRoot(env), 'x86_64-unknown-linux-gnu', 'release', 'bundle')
+    const targetDir = join(cargoTargetRoot(env), target, 'release', 'bundle')
     const assets = collectNewestByExt({
       sourceDir: targetDir,
       artifactDir,
       tag,
       platform: 'linux',
-      arch: 'x64',
+      arch,
       extensions: ['.deb', '.AppImage', '.rpm'],
       builtLines,
     })
@@ -427,15 +450,21 @@ function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
     throw new SkipStepError('Linux artifacts require either a Linux host or Docker.')
   }
 
-  const image = ensureLinuxDockerImage({ env, dryRun })
+  const platform = linuxDockerPlatform(target)
+  const image = ensureLinuxDockerImage({ env, target, platform, dryRun })
   const worktree = createCleanWorktree({ dryRun })
   try {
     const uid = String(process.getuid?.() ?? 1000)
     const gid = String(process.getgid?.() ?? 1000)
+    const pduVersion = env.SQD_PDU_VERSION || '0.23.0'
     const dockerScript = [
       'set -Eeuo pipefail',
       'npm ci',
-      'npm run tauri -- build --target x86_64-unknown-linux-gnu --ci',
+      `if [ ${JSON.stringify(target)} = "aarch64-unknown-linux-gnu" ] && [ ! -x src-tauri/bin/pdu-aarch64-unknown-linux-gnu ]; then`,
+      `  cargo install parallel-disk-usage --version ${JSON.stringify(pduVersion)} --root /tmp/pdu-root`,
+      '  cp /tmp/pdu-root/bin/pdu src-tauri/bin/pdu-aarch64-unknown-linux-gnu',
+      'fi',
+      `npm run tauri -- build --target ${target} --ci`,
     ].join('\n')
 
     let buildError = null
@@ -446,7 +475,7 @@ function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
           'run',
           '--rm',
           '--platform',
-          'linux/amd64',
+          platform,
           '--user',
           `${uid}:${gid}`,
           '-e',
@@ -466,13 +495,13 @@ function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
       buildError = error
     }
 
-    const targetDir = join(worktree, 'src-tauri', 'target', 'x86_64-unknown-linux-gnu', 'release', 'bundle')
+    const targetDir = join(worktree, 'src-tauri', 'target', target, 'release', 'bundle')
     const assets = collectNewestByExt({
       sourceDir: targetDir,
       artifactDir,
       tag,
       platform: 'linux',
-      arch: 'x64',
+      arch,
       extensions: ['.deb', '.AppImage', '.rpm'],
       builtLines,
     })
@@ -573,9 +602,11 @@ function buildWindowsArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
   mkdirSync(rawOutDir, { recursive: true })
   const sharedRawOutDir = `${sharedRepoPath}\\.local\\release-artifacts\\${tag}\\windows-raw`
 
-  runWindowsPowerShell(
-    vmName,
-    `
+  let buildError = null
+  try {
+    runWindowsPowerShell(
+      vmName,
+      `
 $ErrorActionPreference = 'Stop'
 $sharedRepo = ${psQuote(sharedRepoPath)}
 $guestRepo = Join-Path $env:USERPROFILE 'src\\squirreldisk'
@@ -592,8 +623,8 @@ $rc = $LASTEXITCODE
 if ($rc -ge 8) { throw "robocopy failed with code $rc" }
 Set-Location $guestRepo
 rustup target add x86_64-pc-windows-msvc | Out-Null
-npm ci
-npm run tauri -- build --target x86_64-pc-windows-msvc --ci
+npm.cmd ci
+npm.cmd run tauri -- build --target x86_64-pc-windows-msvc --ci
 $bundleRoot = Join-Path $guestRepo 'src-tauri\\target\\x86_64-pc-windows-msvc\\release\\bundle'
 if (!(Test-Path $bundleRoot)) { throw "Missing bundle output at $bundleRoot" }
 $sharedOut = ${psQuote(sharedRawOutDir)}
@@ -602,8 +633,11 @@ Get-ChildItem $bundleRoot -Recurse -File -Include '*.exe','*.msi','*.zip','*.sig
   Copy-Item $_.FullName (Join-Path $sharedOut $_.Name) -Force
 }
 `,
-    { dryRun },
-  )
+      { dryRun },
+    )
+  } catch (error) {
+    buildError = error
+  }
 
   const assets = collectNewestByExt({
     sourceDir: rawOutDir,
@@ -618,7 +652,14 @@ Get-ChildItem $bundleRoot -Recurse -File -Include '*.exe','*.msi','*.zip','*.sig
   rmSync(rawOutDir, { recursive: true, force: true })
 
   if (assets.length === 0) {
+    if (buildError) {
+      throw buildError
+    }
     throw new SkipStepError(`Windows build completed but no bundle artifacts were found in ${rawOutDir}.`)
+  }
+
+  if (buildError) {
+    builtLines.push(`Windows Tauri build exited after producing bundles: ${buildError.message}`)
   }
 
   return assets
@@ -800,6 +841,7 @@ function main() {
   const skippedLines = []
   const assetPaths = []
   const allowDirty = options.allowDirty || envFlagEnabled(env.SQD_RELEASE_ALLOW_DIRTY)
+  const allowPartial = options.allowPartial || envFlagEnabled(env.SQD_RELEASE_ALLOW_PARTIAL)
 
   console.log(`Release tag: ${tag}`)
   console.log(`Release tree: ${releaseTree}`)
@@ -840,6 +882,11 @@ function main() {
       }
       skippedLines.push(`${name} build failed: ${error.message}`)
     }
+  }
+
+  const failedLines = skippedLines.filter((line) => line.includes(' build failed:'))
+  if (failedLines.length > 0 && !allowPartial) {
+    throw new Error(`Refusing to publish a partial release:\n${failedLines.join('\n')}`)
   }
 
   const commit = resolveReleaseCommit(tag, { dryRun: options.dryRun })
