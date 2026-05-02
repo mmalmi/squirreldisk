@@ -19,7 +19,7 @@
 
 </div>
 
-![SquirrelDisk screenshot](/htree/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk/public/squirreldisk.png)
+![SquirrelDisk screenshot](public/squirreldisk.png)
 
 ## What's taking your hard disk space?
 
