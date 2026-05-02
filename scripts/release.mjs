@@ -51,7 +51,7 @@ Environment:
   SQD_RELEASE_TREE
   SQD_RELEASE_OWNER_NPUB
   SQD_RELEASE_ALLOW_DIRTY
-  SQD_MACOS_TARGET         Default: universal-apple-darwin when both mac targets exist
+  SQD_MACOS_TARGET         Default: host macOS architecture
   SQD_LINUX_DOCKER_IMAGE   Default: squirreldisk-tauri-linux-release:local
   SQD_WINDOWS_VM_NAME
   SQD_WINDOWS_SHARED_REPO_PATH
@@ -215,21 +215,9 @@ function shouldRunStep(name, options) {
   return !options.only || options.only.has(name)
 }
 
-function listInstalledRustTargets({ dryRun = false } = {}) {
-  if (dryRun) {
-    return new Set(['aarch64-apple-darwin', 'x86_64-apple-darwin'])
-  }
-  const output = run('rustup', ['target', 'list', '--installed'], { capture: true })
-  return new Set(output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))
-}
-
-function defaultMacosTarget(env, { dryRun = false } = {}) {
+function defaultMacosTarget(env) {
   if (env.SQD_MACOS_TARGET) {
     return env.SQD_MACOS_TARGET
-  }
-  const targets = listInstalledRustTargets({ dryRun })
-  if (targets.has('aarch64-apple-darwin') && targets.has('x86_64-apple-darwin')) {
-    return 'universal-apple-darwin'
   }
   return process.arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin'
 }
@@ -312,7 +300,7 @@ function buildMacosArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
     throw new SkipStepError('macOS artifacts are only built on Darwin hosts.')
   }
 
-  const target = defaultMacosTarget(env, { dryRun })
+  const target = defaultMacosTarget(env)
   run('npm', ['run', 'tauri', '--', 'build', '--target', target, '--bundles', 'app,dmg', '--ci'], {
     dryRun,
   })
