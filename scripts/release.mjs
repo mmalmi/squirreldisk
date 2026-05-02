@@ -39,6 +39,9 @@ Options:
   --skip-verify            Skip npm/cargo verification
   --allow-dirty            Allow releasing from a dirty git tree
   --allow-partial          Publish even if a platform build fails
+  --include-updater-artifacts
+                            Also publish Tauri updater archives
+  --include-extra-packages  Also publish secondary package formats such as RPM/MSI
   --tag <tag>              Release tag (defaults to src-tauri/tauri.conf.json version)
   --release-tree <name>    htree release tree name (default: releases/squirreldisk)
   --owner-npub <npub>      Owner npub for the printed git.iris.to release URL
@@ -53,6 +56,8 @@ Environment:
   SQD_RELEASE_OWNER_NPUB
   SQD_RELEASE_ALLOW_DIRTY
   SQD_RELEASE_ALLOW_PARTIAL
+  SQD_RELEASE_INCLUDE_UPDATER_ARTIFACTS
+  SQD_RELEASE_INCLUDE_EXTRA_PACKAGES
   SQD_MACOS_TARGET         Default: host macOS architecture
   SQD_MACOS_SIGNING_IDENTITY
   SQD_MACOS_NOTARY_PROFILE Optional notarytool keychain profile
@@ -94,6 +99,8 @@ function parseArgs(argv) {
     skipVerify: false,
     allowDirty: false,
     allowPartial: false,
+    includeUpdaterArtifacts: false,
+    includeExtraPackages: false,
     tag: null,
     releaseTree: null,
     ownerNpub: null,
@@ -125,6 +132,12 @@ function parseArgs(argv) {
         break
       case '--allow-partial':
         options.allowPartial = true
+        break
+      case '--include-updater-artifacts':
+        options.includeUpdaterArtifacts = true
+        break
+      case '--include-extra-packages':
+        options.includeExtraPackages = true
         break
       case '--tag':
         options.tag = normalizeTag(argv[++index] ?? '')
@@ -299,7 +312,7 @@ function fileExt(path) {
   return extname(path)
 }
 
-function collectNewestByExt({ sourceDir, artifactDir, tag, platform, arch, extensions, builtLines }) {
+function collectNewestByExt({ sourceDir, artifactDir, tag, platform, arch, extensions, builtLines, dryRun = false }) {
   const files = walkFiles(sourceDir)
   const assets = []
 
@@ -310,16 +323,39 @@ function collectNewestByExt({ sourceDir, artifactDir, tag, platform, arch, exten
     }
 
     const targetName = `squirreldisk-${tag}-${platform}-${arch}${extension}`
-    assets.push(copyAsset(sourcePath, artifactDir, targetName))
+    assets.push(dryRun ? join(artifactDir, targetName) : copyAsset(sourcePath, artifactDir, targetName))
     builtLines.push(`${platform} ${arch} artifact: ${targetName}`)
 
     const sigPath = `${sourcePath}.sig`
     if (existsSync(sigPath)) {
-      assets.push(copyAsset(sigPath, artifactDir, `${targetName}.sig`))
+      assets.push(dryRun ? join(artifactDir, `${targetName}.sig`) : copyAsset(sigPath, artifactDir, `${targetName}.sig`))
     }
   }
 
   return assets
+}
+
+function macosReleaseExtensions({ includeUpdaterArtifacts }) {
+  return includeUpdaterArtifacts ? ['.dmg', '.app.tar.gz'] : ['.dmg']
+}
+
+function linuxReleaseExtensions({ includeExtraPackages }) {
+  const extensions = ['.AppImage', '.deb']
+  if (includeExtraPackages) {
+    extensions.push('.rpm')
+  }
+  return extensions
+}
+
+function windowsReleaseExtensions({ includeUpdaterArtifacts, includeExtraPackages }) {
+  const extensions = ['.exe']
+  if (includeExtraPackages) {
+    extensions.push('.msi')
+  }
+  if (includeUpdaterArtifacts) {
+    extensions.push('.zip')
+  }
+  return extensions
 }
 
 function readTrimmedFile(path) {
@@ -496,7 +532,7 @@ function runVerify({ dryRun, builtLines }) {
   builtLines.push('Ran npm test, npm run build, and cargo test for src-tauri.')
 }
 
-function buildMacosArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
+function buildMacosArtifacts({ env, tag, artifactDir, dryRun, builtLines, includeUpdaterArtifacts }) {
   if (process.platform !== 'darwin') {
     throw new SkipStepError('macOS artifacts are only built on Darwin hosts.')
   }
@@ -517,19 +553,24 @@ function buildMacosArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
   const appTarPath = newestFile(bundleFiles.filter((path) => path.endsWith('.app.tar.gz')))
   const dmgPath = newestFile(bundleFiles.filter((path) => path.endsWith('.dmg')))
 
-  if (!dryRun && (!appPath || !appTarPath || !dmgPath)) {
+  if (!dryRun && (!appPath || !dmgPath || (includeUpdaterArtifacts && !appTarPath))) {
     if (buildError) {
       throw buildError
     }
-    throw new SkipStepError(`macOS build completed but did not produce app, app archive, and dmg artifacts in ${targetDir}.`)
+    const expected = includeUpdaterArtifacts ? 'app, updater archive, and dmg artifacts' : 'app and dmg artifacts'
+    throw new SkipStepError(`macOS build completed but did not produce ${expected} in ${targetDir}.`)
   }
 
-  if (appPath && appTarPath && dmgPath) {
+  if (appPath && dmgPath) {
     const identity = detectMacosSigningIdentity(env, { dryRun })
     signMacosApp({ appPath, identity, dryRun })
     const authArgs = notarizeAndStapleMacosApp({ appPath, env, dryRun })
-    rmSync(appTarPath, { force: true })
-    run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', appPath, appTarPath], { dryRun })
+    if (appTarPath) {
+      if (!dryRun) {
+        rmSync(appTarPath, { force: true })
+      }
+      run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', appPath, appTarPath], { dryRun })
+    }
     createDmgFromApp({ appPath, dmgPath, dryRun })
     notarizeAndStapleDmg({ dmgPath, authArgs, dryRun })
     builtLines.push(`macOS ${archLabel(target)} app and DMG signed, notarized, and stapled.`)
@@ -541,8 +582,9 @@ function buildMacosArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
     tag,
     platform: 'macos',
     arch: archLabel(target),
-    extensions: ['.dmg', '.app.tar.gz'],
+    extensions: macosReleaseExtensions({ includeUpdaterArtifacts }),
     builtLines,
+    dryRun,
   })
 
   if (assets.length === 0) {
@@ -609,9 +651,13 @@ function ensureLinuxDockerImage({ env, target, platform, dryRun }) {
 
 function createCleanWorktree({ dryRun }) {
   const worktreeParent = join(localDir, 'worktrees')
-  mkdirSync(worktreeParent, { recursive: true })
-  const tempDir = mkdtempSync(join(worktreeParent, 'linux-x64-'))
-  rmSync(tempDir, { recursive: true, force: true })
+  if (!dryRun) {
+    mkdirSync(worktreeParent, { recursive: true })
+  }
+  const tempDir = dryRun ? join(worktreeParent, 'linux-dry-run') : mkdtempSync(join(worktreeParent, 'linux-'))
+  if (!dryRun) {
+    rmSync(tempDir, { recursive: true, force: true })
+  }
   run('git', ['worktree', 'add', '--detach', tempDir, 'HEAD'], { dryRun })
   return tempDir
 }
@@ -623,7 +669,7 @@ function removeWorktree(path, { dryRun }) {
   run('git', ['worktree', 'remove', '--force', path], { dryRun })
 }
 
-function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
+function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines, includeExtraPackages }) {
   const target = defaultLinuxTarget(env)
   const arch = archLabel(target)
 
@@ -643,8 +689,9 @@ function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
       tag,
       platform: 'linux',
       arch,
-      extensions: ['.deb', '.AppImage', '.rpm'],
+      extensions: linuxReleaseExtensions({ includeExtraPackages }),
       builtLines,
+      dryRun,
     })
     if (assets.length === 0) {
       if (buildError) {
@@ -720,8 +767,9 @@ function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
       tag,
       platform: 'linux',
       arch,
-      extensions: ['.deb', '.AppImage', '.rpm'],
+      extensions: linuxReleaseExtensions({ includeExtraPackages }),
       builtLines,
+      dryRun,
     })
 
     if (assets.length === 0) {
@@ -795,7 +843,7 @@ function autoDetectWindowsVmName(prlctlListOutput) {
   return candidates.length === 1 ? candidates[0] : null
 }
 
-function buildWindowsArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
+function buildWindowsArtifacts({ env, tag, artifactDir, dryRun, builtLines, includeUpdaterArtifacts, includeExtraPackages }) {
   if (process.platform !== 'darwin') {
     throw new SkipStepError('Windows artifacts are only wired for macOS hosts with Parallels.')
   }
@@ -816,8 +864,10 @@ function buildWindowsArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
   }
 
   const rawOutDir = join(artifactDir, 'windows-raw')
-  rmSync(rawOutDir, { recursive: true, force: true })
-  mkdirSync(rawOutDir, { recursive: true })
+  if (!dryRun) {
+    rmSync(rawOutDir, { recursive: true, force: true })
+    mkdirSync(rawOutDir, { recursive: true })
+  }
   const sharedRawOutDir = `${sharedRepoPath}\\.local\\release-artifacts\\${tag}\\windows-raw`
 
   let buildError = null
@@ -863,11 +913,14 @@ Get-ChildItem $bundleRoot -Recurse -File -Include '*.exe','*.msi','*.zip','*.sig
     tag,
     platform: 'windows',
     arch: 'x64',
-    extensions: ['.exe', '.msi', '.zip'],
+    extensions: windowsReleaseExtensions({ includeUpdaterArtifacts, includeExtraPackages }),
     builtLines,
+    dryRun,
   })
 
-  rmSync(rawOutDir, { recursive: true, force: true })
+  if (!dryRun) {
+    rmSync(rawOutDir, { recursive: true, force: true })
+  }
 
   if (assets.length === 0) {
     if (buildError) {
@@ -1052,23 +1105,61 @@ function main() {
   const assetPaths = []
   const allowDirty = options.allowDirty || envFlagEnabled(env.SQD_RELEASE_ALLOW_DIRTY)
   const allowPartial = options.allowPartial || envFlagEnabled(env.SQD_RELEASE_ALLOW_PARTIAL)
+  const includeUpdaterArtifacts =
+    options.includeUpdaterArtifacts || envFlagEnabled(env.SQD_RELEASE_INCLUDE_UPDATER_ARTIFACTS)
+  const includeExtraPackages =
+    options.includeExtraPackages || envFlagEnabled(env.SQD_RELEASE_INCLUDE_EXTRA_PACKAGES)
 
   console.log(`Release tag: ${tag}`)
   console.log(`Release tree: ${releaseTree}`)
   console.log(`Release page: ${releasePageUrl(ownerNpub, 'squirreldisk', tag)}`)
+  console.log(
+    `Release assets: ${[
+      'macOS DMG',
+      'Linux AppImage',
+      'Linux DEB',
+      'Windows EXE installer',
+      includeUpdaterArtifacts ? 'Tauri updater archives' : null,
+      includeExtraPackages ? 'extra RPM/MSI packages' : null,
+    ].filter(Boolean).join(', ')}`,
+  )
   if (options.dryRun) {
     console.log('Dry run mode: no build, copy, or publish commands will be executed.')
   }
 
   checkGitClean({ allowDirty, dryRun: options.dryRun })
-  rmSync(artifactDir, { recursive: true, force: true })
-  mkdirSync(artifactDir, { recursive: true })
+  if (!options.dryRun) {
+    rmSync(artifactDir, { recursive: true, force: true })
+    mkdirSync(artifactDir, { recursive: true })
+  }
 
   const steps = [
     ['verify', () => runVerify({ dryRun: options.dryRun, builtLines })],
-    ['macos', () => buildMacosArtifacts({ env, tag, artifactDir, dryRun: options.dryRun, builtLines })],
-    ['linux', () => buildLinuxArtifacts({ env, tag, artifactDir, dryRun: options.dryRun, builtLines })],
-    ['windows', () => buildWindowsArtifacts({ env, tag, artifactDir, dryRun: options.dryRun, builtLines })],
+    ['macos', () => buildMacosArtifacts({
+      env,
+      tag,
+      artifactDir,
+      dryRun: options.dryRun,
+      builtLines,
+      includeUpdaterArtifacts,
+    })],
+    ['linux', () => buildLinuxArtifacts({
+      env,
+      tag,
+      artifactDir,
+      dryRun: options.dryRun,
+      builtLines,
+      includeExtraPackages,
+    })],
+    ['windows', () => buildWindowsArtifacts({
+      env,
+      tag,
+      artifactDir,
+      dryRun: options.dryRun,
+      builtLines,
+      includeUpdaterArtifacts,
+      includeExtraPackages,
+    })],
   ]
 
   for (const [name, fn] of steps) {

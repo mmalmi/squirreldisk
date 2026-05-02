@@ -4,7 +4,7 @@ version = "0.0.0"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
-repository = ""
+repository = "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk"
 edition = "2021"
 rust-version = "1.57"
 

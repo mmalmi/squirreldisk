@@ -2,6 +2,11 @@
   "name": "squirreldisk-tauri",
   "private": true,
   "version": "0.0.0",
+  "repository": "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk",
+  "homepage": "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk",
+  "bugs": {
+    "url": "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk?tab=issues"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
