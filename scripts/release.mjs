@@ -229,6 +229,10 @@ function archLabel(target) {
   return target.replace(/[^a-zA-Z0-9._-]+/g, '-')
 }
 
+function cargoTargetRoot(env, fallbackRoot = repoRoot) {
+  return env.CARGO_TARGET_DIR ? resolve(fallbackRoot, env.CARGO_TARGET_DIR) : join(fallbackRoot, 'src-tauri', 'target')
+}
+
 function walkFiles(root) {
   if (!existsSync(root)) {
     return []
@@ -301,11 +305,16 @@ function buildMacosArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
   }
 
   const target = defaultMacosTarget(env)
-  run('npm', ['run', 'tauri', '--', 'build', '--target', target, '--bundles', 'app,dmg', '--ci'], {
-    dryRun,
-  })
+  let buildError = null
+  try {
+    run('npm', ['run', 'tauri', '--', 'build', '--target', target, '--bundles', 'app,dmg', '--ci'], {
+      dryRun,
+    })
+  } catch (error) {
+    buildError = error
+  }
 
-  const targetDir = join(repoRoot, 'src-tauri', 'target', target, 'release', 'bundle')
+  const targetDir = join(cargoTargetRoot(env), target, 'release', 'bundle')
   const assets = collectNewestByExt({
     sourceDir: targetDir,
     artifactDir,
@@ -317,7 +326,14 @@ function buildMacosArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
   })
 
   if (assets.length === 0) {
+    if (buildError) {
+      throw buildError
+    }
     throw new SkipStepError(`macOS build completed but no bundle artifacts were found in ${targetDir}.`)
+  }
+
+  if (buildError) {
+    builtLines.push(`macOS Tauri build exited after producing bundles: ${buildError.message}`)
   }
 
   return assets
@@ -377,10 +393,15 @@ function removeWorktree(path, { dryRun }) {
 
 function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
   if (process.platform === 'linux') {
-    run('npm', ['run', 'tauri', '--', 'build', '--target', 'x86_64-unknown-linux-gnu', '--ci'], {
-      dryRun,
-    })
-    const targetDir = join(repoRoot, 'src-tauri', 'target', 'x86_64-unknown-linux-gnu', 'release', 'bundle')
+    let buildError = null
+    try {
+      run('npm', ['run', 'tauri', '--', 'build', '--target', 'x86_64-unknown-linux-gnu', '--ci'], {
+        dryRun,
+      })
+    } catch (error) {
+      buildError = error
+    }
+    const targetDir = join(cargoTargetRoot(env), 'x86_64-unknown-linux-gnu', 'release', 'bundle')
     const assets = collectNewestByExt({
       sourceDir: targetDir,
       artifactDir,
@@ -391,7 +412,13 @@ function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
       builtLines,
     })
     if (assets.length === 0) {
+      if (buildError) {
+        throw buildError
+      }
       throw new SkipStepError(`Linux build completed but no bundle artifacts were found in ${targetDir}.`)
+    }
+    if (buildError) {
+      builtLines.push(`Linux Tauri build exited after producing bundles: ${buildError.message}`)
     }
     return assets
   }
@@ -411,28 +438,33 @@ function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
       'npm run tauri -- build --target x86_64-unknown-linux-gnu --ci',
     ].join('\n')
 
-    run(
-      'docker',
-      [
-        'run',
-        '--rm',
-        '--platform',
-        'linux/amd64',
-        '--user',
-        `${uid}:${gid}`,
-        '-e',
-        'HOME=/tmp/squirreldisk-home',
-        '-v',
-        `${worktree}:/work`,
-        '-w',
-        '/work',
-        image,
-        'bash',
-        '-lc',
-        dockerScript,
-      ],
-      { dryRun },
-    )
+    let buildError = null
+    try {
+      run(
+        'docker',
+        [
+          'run',
+          '--rm',
+          '--platform',
+          'linux/amd64',
+          '--user',
+          `${uid}:${gid}`,
+          '-e',
+          'HOME=/tmp/squirreldisk-home',
+          '-v',
+          `${worktree}:/work`,
+          '-w',
+          '/work',
+          image,
+          'bash',
+          '-lc',
+          dockerScript,
+        ],
+        { dryRun },
+      )
+    } catch (error) {
+      buildError = error
+    }
 
     const targetDir = join(worktree, 'src-tauri', 'target', 'x86_64-unknown-linux-gnu', 'release', 'bundle')
     const assets = collectNewestByExt({
@@ -446,7 +478,14 @@ function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
     })
 
     if (assets.length === 0) {
+      if (buildError) {
+        throw buildError
+      }
       throw new SkipStepError(`Linux build completed but no bundle artifacts were found in ${targetDir}.`)
+    }
+
+    if (buildError) {
+      builtLines.push(`Linux Tauri build exited after producing bundles: ${buildError.message}`)
     }
 
     return assets
