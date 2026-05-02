@@ -56,6 +56,7 @@ Environment:
   SQD_MACOS_TARGET         Default: host macOS architecture
   SQD_LINUX_TARGET         Default: host Linux architecture in Docker
   SQD_LINUX_DOCKER_IMAGE   Default: squirreldisk-tauri-linux-release:<arch>
+  SQD_LINUX_CARGO_JOBS     Default: 1 inside Docker for reproducible builds
   SQD_PDU_VERSION          Default: 0.23.0
   SQD_WINDOWS_VM_NAME
   SQD_WINDOWS_SHARED_REPO_PATH
@@ -457,6 +458,7 @@ function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
     const uid = String(process.getuid?.() ?? 1000)
     const gid = String(process.getgid?.() ?? 1000)
     const pduVersion = env.SQD_PDU_VERSION || '0.23.0'
+    const cargoJobs = env.SQD_LINUX_CARGO_JOBS || '1'
     const dockerScript = [
       'set -Eeuo pipefail',
       '. /usr/local/cargo/env',
@@ -481,6 +483,10 @@ function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
           `${uid}:${gid}`,
           '-e',
           'HOME=/tmp/squirreldisk-home',
+          '-e',
+          'CARGO_INCREMENTAL=0',
+          '-e',
+          `CARGO_BUILD_JOBS=${cargoJobs}`,
           '-v',
           `${worktree}:/work`,
           '-w',
