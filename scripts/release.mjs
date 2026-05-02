@@ -697,7 +697,7 @@ function describeAsset(name) {
   if (name.endsWith('.rpm')) return 'Linux RPM package'
   if (name.endsWith('.exe')) return 'Windows installer'
   if (name.endsWith('.msi')) return 'Windows MSI installer'
-  if (name.endsWith('.zip')) return 'Windows portable archive'
+  if (name.endsWith('.zip')) return 'Windows updater archive'
   return name
 }
 
