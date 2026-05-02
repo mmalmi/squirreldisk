@@ -54,6 +54,11 @@ Environment:
   SQD_RELEASE_ALLOW_DIRTY
   SQD_RELEASE_ALLOW_PARTIAL
   SQD_MACOS_TARGET         Default: host macOS architecture
+  SQD_MACOS_SIGNING_IDENTITY
+  SQD_MACOS_NOTARY_PROFILE Optional notarytool keychain profile
+  SQD_ASC_AUTH_KEY_PATH    Defaults to ~/.appstoreconnect/private_keys/AuthKey_*.p8
+  SQD_ASC_AUTH_KEY_ID      Defaults from AuthKey_<id>.p8
+  SQD_ASC_AUTH_KEY_ISSUER_ID Defaults from ~/.appstoreconnect/issuer.txt
   SQD_LINUX_TARGET         Default: host Linux architecture in Docker
   SQD_LINUX_DOCKER_IMAGE   Default: squirreldisk-tauri-linux-release:<arch>
   SQD_LINUX_CARGO_JOBS     Default: 1 inside Docker for reproducible builds
@@ -259,6 +264,22 @@ function walkFiles(root) {
   return result
 }
 
+function walkDirectories(root) {
+  if (!existsSync(root)) {
+    return []
+  }
+
+  const result = []
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const path = join(root, entry.name)
+    if (entry.isDirectory()) {
+      result.push(path)
+      result.push(...walkDirectories(path))
+    }
+  }
+  return result
+}
+
 function newestFile(paths) {
   return paths
     .filter((path) => existsSync(path))
@@ -301,6 +322,173 @@ function collectNewestByExt({ sourceDir, artifactDir, tag, platform, arch, exten
   return assets
 }
 
+function readTrimmedFile(path) {
+  if (!existsSync(path)) {
+    return ''
+  }
+  return readFileSync(path, 'utf8').trim()
+}
+
+function defaultAscRoot(env) {
+  return env.SQD_ASC_ROOT || join(os.homedir(), '.appstoreconnect')
+}
+
+function defaultAscAuthKeyPath(env) {
+  const ascRoot = defaultAscRoot(env)
+  const keysDir = join(ascRoot, 'private_keys')
+  if (!existsSync(keysDir)) {
+    return ''
+  }
+  const keyName = readdirSync(keysDir)
+    .filter((name) => /^AuthKey_[A-Z0-9]+\.p8$/.test(name))
+    .sort()[0]
+  return keyName ? join(keysDir, keyName) : ''
+}
+
+function defaultAscAuthKeyId(keyPath) {
+  const match = basename(keyPath).match(/^AuthKey_([A-Z0-9]+)\.p8$/)
+  return match?.[1] || ''
+}
+
+function macosNotaryAuthArgs(env) {
+  const profile = String(env.SQD_MACOS_NOTARY_PROFILE || env.MACOS_NOTARY_PROFILE || '').trim()
+  if (profile) {
+    return ['--keychain-profile', profile]
+  }
+
+  const keyPath = String(
+    env.SQD_ASC_AUTH_KEY_PATH || env.IRIS_ASC_AUTH_KEY_PATH || env.NVPN_ASC_AUTH_KEY_PATH || defaultAscAuthKeyPath(env),
+  ).trim()
+  const keyId = String(
+    env.SQD_ASC_AUTH_KEY_ID || env.IRIS_ASC_AUTH_KEY_ID || env.NVPN_ASC_AUTH_KEY_ID || defaultAscAuthKeyId(keyPath),
+  ).trim()
+  const issuer = String(
+    env.SQD_ASC_AUTH_KEY_ISSUER_ID
+      || env.IRIS_ASC_AUTH_KEY_ISSUER_ID
+      || env.NVPN_ASC_AUTH_KEY_ISSUER_ID
+      || readTrimmedFile(join(defaultAscRoot(env), 'issuer.txt')),
+  ).trim()
+
+  const missing = []
+  if (!keyPath) missing.push('SQD_ASC_AUTH_KEY_PATH')
+  if (!keyId) missing.push('SQD_ASC_AUTH_KEY_ID')
+  if (!issuer) missing.push('SQD_ASC_AUTH_KEY_ISSUER_ID')
+  if (missing.length > 0) {
+    throw new Error(`Missing macOS notarization credentials: ${missing.join(', ')}`)
+  }
+  if (!existsSync(keyPath)) {
+    throw new Error(`macOS notarization key not found: ${keyPath}`)
+  }
+
+  return ['--key', keyPath, '--key-id', keyId, '--issuer', issuer]
+}
+
+function detectMacosSigningIdentity(env, { dryRun }) {
+  const configured = String(env.SQD_MACOS_SIGNING_IDENTITY || env.MACOS_SIGNING_IDENTITY || '').trim()
+  if (configured) {
+    return configured
+  }
+  if (dryRun) {
+    return 'Developer ID Application: Example (TEAMID)'
+  }
+
+  const identities = run('security', ['find-identity', '-v', '-p', 'codesigning'], { capture: true })
+  const matches = [...identities.matchAll(/"([^"]*Developer ID Application[^"]*)"/g)].map((match) => match[1])
+  if (matches.length === 1) {
+    return matches[0]
+  }
+  if (matches.length === 0) {
+    throw new Error('No Developer ID Application signing identity found in the login keychain.')
+  }
+  throw new Error(`Multiple Developer ID Application identities found; set SQD_MACOS_SIGNING_IDENTITY. Candidates: ${matches.join(', ')}`)
+}
+
+function signMacosApp({ appPath, identity, dryRun }) {
+  run(
+    'codesign',
+    [
+      '--force',
+      '--deep',
+      '--options',
+      'runtime',
+      '--timestamp',
+      '--sign',
+      identity,
+      appPath,
+    ],
+    { dryRun },
+  )
+  run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appPath], { dryRun })
+}
+
+function submitNotarization({ artifactPath, authArgs, label, dryRun }) {
+  const output = run(
+    'xcrun',
+    ['notarytool', 'submit', artifactPath, ...authArgs, '--wait', '--output-format', 'json'],
+    { capture: true, dryRun },
+  )
+  if (dryRun) {
+    return
+  }
+
+  const submission = JSON.parse(output)
+  if (submission.status !== 'Accepted') {
+    if (submission.id) {
+      try {
+        run('xcrun', ['notarytool', 'log', submission.id, ...authArgs])
+      } catch {}
+    }
+    throw new Error(`${label} notarization status was '${submission.status}' (expected 'Accepted').`)
+  }
+}
+
+function notarizeAndStapleMacosApp({ appPath, env, dryRun }) {
+  const authArgs = macosNotaryAuthArgs(env)
+  const tempRoot = dryRun ? join(os.tmpdir(), 'squirreldisk-notary-dry-run') : mkdtempSync(join(os.tmpdir(), 'squirreldisk-notary-'))
+  const zipPath = join(tempRoot, 'SquirrelDisk.app.zip')
+
+  try {
+    run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', appPath, zipPath], { dryRun })
+    submitNotarization({ artifactPath: zipPath, authArgs, label: 'macOS app', dryRun })
+    run('xcrun', ['stapler', 'staple', appPath], { dryRun })
+    run('xcrun', ['stapler', 'validate', appPath], { dryRun })
+    run('spctl', ['--assess', '--type', 'execute', '--verbose=4', appPath], { dryRun })
+  } finally {
+    if (!dryRun) {
+      rmSync(tempRoot, { recursive: true, force: true })
+    }
+  }
+
+  return authArgs
+}
+
+function createDmgFromApp({ appPath, dmgPath, dryRun }) {
+  const stageDir = dryRun ? join(os.tmpdir(), 'squirreldisk-dmg-dry-run') : mkdtempSync(join(os.tmpdir(), 'squirreldisk-dmg-'))
+
+  try {
+    if (!dryRun) {
+      rmSync(dmgPath, { force: true })
+    }
+    run('ditto', [appPath, join(stageDir, basename(appPath))], { dryRun })
+    run('ln', ['-s', '/Applications', join(stageDir, 'Applications')], { dryRun })
+    run(
+      'hdiutil',
+      ['create', '-volname', 'SquirrelDisk', '-srcfolder', stageDir, '-fs', 'HFS+', '-format', 'UDZO', '-ov', dmgPath],
+      { dryRun },
+    )
+  } finally {
+    if (!dryRun) {
+      rmSync(stageDir, { recursive: true, force: true })
+    }
+  }
+}
+
+function notarizeAndStapleDmg({ dmgPath, authArgs, dryRun }) {
+  submitNotarization({ artifactPath: dmgPath, authArgs, label: 'macOS DMG', dryRun })
+  run('xcrun', ['stapler', 'staple', dmgPath], { dryRun })
+  run('xcrun', ['stapler', 'validate', dmgPath], { dryRun })
+}
+
 function runVerify({ dryRun, builtLines }) {
   run('npm', ['test'], { dryRun })
   run('npm', ['run', 'build'], { dryRun })
@@ -324,6 +512,29 @@ function buildMacosArtifacts({ env, tag, artifactDir, dryRun, builtLines }) {
   }
 
   const targetDir = join(cargoTargetRoot(env), target, 'release', 'bundle')
+  const appPath = newestFile(walkDirectories(targetDir).filter((path) => path.endsWith('.app')))
+  const bundleFiles = walkFiles(targetDir)
+  const appTarPath = newestFile(bundleFiles.filter((path) => path.endsWith('.app.tar.gz')))
+  const dmgPath = newestFile(bundleFiles.filter((path) => path.endsWith('.dmg')))
+
+  if (!dryRun && (!appPath || !appTarPath || !dmgPath)) {
+    if (buildError) {
+      throw buildError
+    }
+    throw new SkipStepError(`macOS build completed but did not produce app, app archive, and dmg artifacts in ${targetDir}.`)
+  }
+
+  if (appPath && appTarPath && dmgPath) {
+    const identity = detectMacosSigningIdentity(env, { dryRun })
+    signMacosApp({ appPath, identity, dryRun })
+    const authArgs = notarizeAndStapleMacosApp({ appPath, env, dryRun })
+    rmSync(appTarPath, { force: true })
+    run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', appPath, appTarPath], { dryRun })
+    createDmgFromApp({ appPath, dmgPath, dryRun })
+    notarizeAndStapleDmg({ dmgPath, authArgs, dryRun })
+    builtLines.push(`macOS ${archLabel(target)} app and DMG signed, notarized, and stapled.`)
+  }
+
   const assets = collectNewestByExt({
     sourceDir: targetDir,
     artifactDir,
