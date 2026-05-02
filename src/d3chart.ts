@@ -428,8 +428,7 @@ export const getChart = (
   }
 
   function arcClickHandler(event: any, focusedNode: D3HierarchyDiskItem) {
-    if (!focusedNode.children) {
-      // TODO: Handle click on sidebar focus
+    if (!focusedNode.children && !focusedNode.data.isDirectory) {
       return;
     }
 

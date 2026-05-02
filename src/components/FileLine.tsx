@@ -28,6 +28,7 @@ export const FileLine = ({
   onHoverEnd,
 }: FileLineProps) => {
   const isRestricted = !!item.data.restricted;
+  const isDirectory = !!item.data.isDirectory || !!item.children;
   return (
     <Draggable
       draggableId={item.data.id}
@@ -53,10 +54,8 @@ export const FileLine = ({
           onClick={() => {
             isRestricted
               ? invoke("show_in_folder", { path: buildFullPath(item) })
-              : item.children
-              ? d3Chart.current.focusDirectory(
-                  item,
-                ) /*window.electron.diskUtils.showItemInFolder(buildFullPath(c))*/
+              : isDirectory
+              ? d3Chart.current?.focusDirectory(item)
               : invoke("show_in_folder", { path: buildFullPath(item) });
           }}
           onMouseEnter={() => onHover(item)}
