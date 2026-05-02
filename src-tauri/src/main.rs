@@ -5,6 +5,7 @@
 #![allow(unexpected_cfgs)]
 mod scan;
 mod snapshots;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 mod window_style;
 
 use serde::Serialize;
@@ -49,7 +50,10 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .manage(MyState(Default::default()))
         .setup(|app| {
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             let window = app.get_webview_window("main").unwrap();
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            let _ = app;
             // window.open_devtools();
             #[cfg(target_os = "macos")]
             window_vibrancy::apply_vibrancy(&window, NSVisualEffectMaterial::HudWindow, None, None)
@@ -59,7 +63,7 @@ fn main() {
             window_vibrancy::apply_blur(&window, Some((18, 18, 18, 125)))
                 .expect("Error applying blurred bg");
 
-            #[cfg(any(windows, target_os = "macos"))]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             window_style::set_window_styles(&window).unwrap();
 
             // app.listen_global("scan_stop", |event| {

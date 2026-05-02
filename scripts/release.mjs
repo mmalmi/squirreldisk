@@ -680,14 +680,6 @@ function resolveReleaseCommit(tag, { dryRun }) {
   if (dryRun) {
     return tag
   }
-  const tagged = spawnSync('git', ['rev-parse', '-q', '--verify', `${tag}^{commit}`], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    stdio: 'pipe',
-  })
-  if (tagged.status === 0 && tagged.stdout.trim()) {
-    return tagged.stdout.trim()
-  }
   return run('git', ['rev-parse', 'HEAD'], { capture: true })
 }
 
