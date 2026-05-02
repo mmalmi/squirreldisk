@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.7
+
+- Restored hover preview for directory contents while keeping the sidebar to one directory at a time.
+- Kept preview interactions consistent with navigation, drag, and delete behavior.
+
 ## v0.3.6
 
 - Kept the sidebar contents anchored to the active directory while preserving hover highlighting.

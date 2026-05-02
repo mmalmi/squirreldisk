@@ -107,6 +107,8 @@ const Scanning = () => {
   // Current Directory
   const [focusedDirectory, setFocusedDirectory] =
     useState<D3HierarchyDiskItem | null>(null);
+  const [previewDirectory, setPreviewDirectory] =
+    useState<D3HierarchyDiskItem | null>(null);
   // Hovered Item
   const [hoveredItem, setHoveredItem] = useState<DiskItem | null>(null);
 
@@ -134,6 +136,9 @@ const Scanning = () => {
   const hoverListItem = (item: D3HierarchyDiskItem) => {
     setHoveredItem({ ...item.data });
     d3Chart.current?.setHoveredNode(item);
+  };
+  const clearPreviewDirectory = () => {
+    setPreviewDirectory(null);
   };
   const clearHoveredItem = () => {
     setHoveredItem(null);
@@ -273,12 +278,15 @@ const Scanning = () => {
         centerHover: (_, p) => {
           // console.log({centerHover: p})
           setHoveredItem({ ...p.data });
+          setPreviewDirectory(null);
         },
         arcHover: (_, p) => {
           // console.log({arcHover: p})
           setHoveredItem({ ...p.data });
+          setPreviewDirectory(p.children || p.data.isDirectory ? p : null);
         },
         arcClicked: (_, p) => {
+          clearPreviewDirectory();
           setFocusedDirectory(p);
           return p;
         },
@@ -292,7 +300,8 @@ const Scanning = () => {
       : null;
   const scanRate = status ? formatScanRate(status.total, elapsedSeconds) : "0 B/s";
   const scannedAtText = formatScannedAt(scannedAt);
-  const listedDirectory = focusedDirectory;
+  const listedDirectory = previewDirectory || focusedDirectory;
+  const isPreviewingDirectory = !!previewDirectory;
   const selectedDeleteBytes = deleteList.reduce(
     (sum, node) => sum + (node.data.size || 0),
     0
@@ -533,7 +542,7 @@ const Scanning = () => {
               if (result.destination?.droppableId !== "deletelist") {
                 return;
               }
-              const item = focusedDirectory?.children?.find(
+              const item = listedDirectory?.children?.find(
                 (i) => i.data.id === result.draggableId,
               );
               if (!item) {
@@ -554,6 +563,7 @@ const Scanning = () => {
               className="flex flex-1"
               onMouseLeave={() => {
                 clearHoveredItem();
+                clearPreviewDirectory();
               }}
             >
               <div
@@ -571,6 +581,7 @@ const Scanning = () => {
                   <ParentFolder
                     focusedDirectory={listedDirectory}
                     d3Chart={d3Chart}
+                    isPreview={isPreviewingDirectory}
                   ></ParentFolder>
                 )}
                 {scannedAtText && (
