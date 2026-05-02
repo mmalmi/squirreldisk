@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "test": "vitest run",
     "preview": "vite preview",
+    "release:local": "node scripts/release.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
