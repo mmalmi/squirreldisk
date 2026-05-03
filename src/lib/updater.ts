@@ -1,4 +1,4 @@
-import { check as pluginCheck, Update, type DownloadEvent } from '@hashtree/tauri-plugin-updater'
+import { check as pluginCheck, Update, type DownloadEvent } from './updater-api'
 
 const PREFS_KEY = 'squirreldisk.updater.prefs.v1'
 const DEFAULT_AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000 // 6h

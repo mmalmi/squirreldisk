@@ -42,7 +42,9 @@ const TitleBar = () => {
       style={{ background: "#0F1831" }}
     >
       {plf !== "macos" ? (
-        <img src={Logo} className="h-6 w-6"></img>
+        <Link to="/" aria-label="Home">
+          <img src={Logo} className="h-6 w-6" />
+        </Link>
       ) : (
         <CloseButton></CloseButton>
       )}
@@ -124,7 +126,9 @@ const TitleBar = () => {
         {plf !== "macos" ? (
           <CloseButton></CloseButton>
         ) : (
-          <img src={Logo} className="h-6 w-6"></img>
+          <Link to="/" aria-label="Home">
+            <img src={Logo} className="h-6 w-6" />
+          </Link>
         )}
       </div>
     </div>
