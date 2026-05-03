@@ -155,6 +155,26 @@ fn restricted_path_from_captures(groups: Captures) -> RestrictedPathPayload {
     }
 }
 
+fn add_shared_scan_args(paths: &mut Vec<String>, include_shared_scan_args: bool) {
+    if include_shared_scan_args {
+        paths.push("--deduplicate-hardlinks".to_string());
+        paths.push("--omit-json-shared-details".to_string());
+        paths.push("--omit-json-shared-summary".to_string());
+    }
+}
+
+fn initial_scan_args_for_platform(ratio: &str, include_shared_scan_args: bool) -> Vec<String> {
+    let mut paths = vec!["--json-output".to_string(), "--progress".to_string()];
+    add_shared_scan_args(&mut paths, include_shared_scan_args);
+    paths.push("--threads=max".to_string());
+    paths.push(["--min-ratio=", ratio].join(""));
+    paths
+}
+
+fn initial_scan_args(ratio: &str) -> Vec<String> {
+    initial_scan_args_for_platform(ratio, !cfg!(target_os = "windows"))
+}
+
 // Start scan
 pub fn start(
     app_handle: tauri::AppHandle,
@@ -163,16 +183,7 @@ pub fn start(
     ratio: String,
 ) -> Result<(), ()> {
     println!("Start Scanning {}", path);
-    let ratio = ["--min-ratio=", ratio.as_str()].join("");
-
-    let mut paths_to_scan: Vec<String> = Vec::new();
-    paths_to_scan.push("--json-output".to_string());
-    paths_to_scan.push("--progress".to_string());
-    paths_to_scan.push("--deduplicate-hardlinks".to_string());
-    paths_to_scan.push("--omit-json-shared-details".to_string());
-    paths_to_scan.push("--omit-json-shared-summary".to_string());
-    paths_to_scan.push("--threads=max".to_string());
-    paths_to_scan.push(ratio);
+    let mut paths_to_scan = initial_scan_args(&ratio);
 
     if path.eq("/") {
         let paths = fs::read_dir("/").map_err(|_| ())?;
@@ -430,6 +441,46 @@ mod tests {
         assert_eq!(restricted_path.operation, "read_dir");
         assert_eq!(restricted_path.path, "/Users/me/Library/Mobile Documents");
         assert_eq!(restricted_path.message, "Permission denied");
+    }
+
+    #[test]
+    fn scan_args_include_shared_options_on_supported_platforms() {
+        let args = initial_scan_args_for_platform("0.001", true);
+
+        assert!(args.contains(&"--deduplicate-hardlinks".to_string()));
+        assert!(args.contains(&"--omit-json-shared-details".to_string()));
+        assert!(args.contains(&"--omit-json-shared-summary".to_string()));
+        assert!(args.contains(&"--min-ratio=0.001".to_string()));
+    }
+
+    #[test]
+    fn scan_args_skip_unsupported_shared_options_on_windows() {
+        let args = initial_scan_args_for_platform("0.001", false);
+
+        assert!(!args.contains(&"--deduplicate-hardlinks".to_string()));
+        assert!(!args.contains(&"--omit-json-shared-details".to_string()));
+        assert!(!args.contains(&"--omit-json-shared-summary".to_string()));
+        assert!(args.contains(&"--min-ratio=0.001".to_string()));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn default_scan_args_skip_unsupported_windows_options() {
+        let args = initial_scan_args("0.001");
+
+        assert!(!args.contains(&"--deduplicate-hardlinks".to_string()));
+        assert!(!args.contains(&"--omit-json-shared-details".to_string()));
+        assert!(!args.contains(&"--omit-json-shared-summary".to_string()));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn default_scan_args_include_shared_options_when_supported() {
+        let args = initial_scan_args("0.001");
+
+        assert!(args.contains(&"--deduplicate-hardlinks".to_string()));
+        assert!(args.contains(&"--omit-json-shared-details".to_string()));
+        assert!(args.contains(&"--omit-json-shared-summary".to_string()));
     }
 
     #[cfg(target_os = "macos")]

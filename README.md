@@ -3,7 +3,7 @@
 <br>
 
 <p align="center">
-    <a href="https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk?tab=releases"><img src="https://img.shields.io/badge/version-v0.3.7-ff00a0?style=flat-square"></a>
+    <a href="https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk?tab=releases"><img src="https://img.shields.io/badge/version-v0.3.8-ff00a0?style=flat-square"></a>
      &nbsp;
       <a href="https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk"><img src="https://shields.io/badge/-ALPHA-orange?color=%23ff00a0&include_prereleases&label=status&sort=semver&style=flat-square"></a>
     &nbsp;

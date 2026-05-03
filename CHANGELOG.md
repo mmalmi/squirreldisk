@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.8
+
+- Fixed Windows scans by skipping `pdu` hardlink/shared-output flags that the Windows build cannot support.
+- Added regression tests for platform-specific scan helper arguments.
+
 ## v0.3.7
 
 - Restored hover preview for directory contents while keeping the sidebar to one directory at a time.
