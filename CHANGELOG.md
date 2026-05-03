@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.12
+
+- Fixed phantom duplicate directories appearing alongside real ones (most visibly `Program Files` on Windows): restricted-path inserts now match existing folders by structure, not by an `isDirectory` flag that pdu's raw output never sets.
+- Added a privacy access status check: shows when Full Disk Access (macOS) or admin elevation (Windows) is already granted, and offers a "Relaunch as Administrator" action on Windows to reduce restricted items.
+
 ## v0.3.11
 
 - Fixed the right sidebar directory source so active and hover-preview contents cannot be rendered together.

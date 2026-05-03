@@ -43,7 +43,7 @@
   },
   "productName": "SquirrelDisk",
   "mainBinaryName": "squirrel-disk",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "identifier": "com.squirreldisk.dev",
   "app": {
     "windows": [
