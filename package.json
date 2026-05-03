@@ -12,6 +12,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test": "vitest run",
+    "test:sidebar-e2e": "node scripts/sidebar-e2e.mjs",
     "preview": "vite preview",
     "release:local": "node scripts/release.mjs",
     "tauri": "tauri"

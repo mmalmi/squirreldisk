@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.11
+
+- Fixed the right sidebar directory source so active and hover-preview contents cannot be rendered together.
+- Clicking a sidebar directory now commits that directory through the same focus path used by the chart.
+- Hovering sidebar rows now drives the matching chart hover highlight.
+- Added a pdu-backed sidebar e2e smoke test that catches mixed active/preview directory rows.
+
 ## v0.3.10
 
 - Removed unused Tauri HTTP and updater plugins, permissions, and updater endpoint configuration.

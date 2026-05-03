@@ -325,6 +325,9 @@ const updateData = (
       (enter) => {
         let xx = enter
           .append("path")
+          .attr("data-testid", "chart-arc")
+          .attr("data-node-id", (d) => d.data.id)
+          .attr("data-node-name", (d) => d.data.name)
           .attr("fill", getChartColor)
           .attr("fill-opacity", (d) => baseArcOpacity(d))
           .attr("stroke", "#2f3746")
@@ -341,6 +344,9 @@ const updateData = (
       (update) => {
         update.select("title").text((d) => titleText(d, mul));
         return update
+          .attr("data-testid", "chart-arc")
+          .attr("data-node-id", (d) => d.data.id)
+          .attr("data-node-name", (d) => d.data.name)
           .attr("fill", getChartColor)
           .attr("fill-opacity", (d) => baseArcOpacity(d))
           .attr("stroke", "#2f3746")

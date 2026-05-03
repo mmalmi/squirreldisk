@@ -66,6 +66,9 @@ const DELETE_COUNTDOWN_SECONDS = 5;
 const normalizeNodePath = (node: D3HierarchyDiskItem) =>
   buildFullPath(node).replace(/\\/g, "/");
 
+const isDirectoryNode = (node: D3HierarchyDiskItem | null) =>
+  !!node && (!!node.data.isDirectory || !!node.children);
+
 const wait = (ms: number) =>
   new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -132,6 +135,11 @@ const Scanning = () => {
   const updateScannedAt = (value: number | null) => {
     scannedAtRef.current = value;
     setScannedAt(value);
+  };
+  const focusDirectory = (directory: D3HierarchyDiskItem) => {
+    clearPreviewDirectory();
+    setFocusedDirectory(directory);
+    d3Chart.current?.focusDirectory(directory);
   };
   const hoverListItem = (item: D3HierarchyDiskItem) => {
     setHoveredItem({ ...item.data });
@@ -283,7 +291,7 @@ const Scanning = () => {
         arcHover: (_, p) => {
           // console.log({arcHover: p})
           setHoveredItem({ ...p.data });
-          setPreviewDirectory(p.children || p.data.isDirectory ? p : null);
+          setPreviewDirectory(isDirectoryNode(p) ? p : null);
         },
         arcClicked: (_, p) => {
           clearPreviewDirectory();
@@ -302,6 +310,8 @@ const Scanning = () => {
   const scannedAtText = formatScannedAt(scannedAt);
   const listedDirectory = previewDirectory || focusedDirectory;
   const isPreviewingDirectory = !!previewDirectory;
+  const listedDirectoryId = listedDirectory?.data.id || "empty";
+  const listedChildren = listedDirectory?.children || [];
   const selectedDeleteBytes = deleteList.reduce(
     (sum, node) => sum + (node.data.size || 0),
     0
@@ -580,8 +590,8 @@ const Scanning = () => {
                 {listedDirectory && (
                   <ParentFolder
                     focusedDirectory={listedDirectory}
-                    d3Chart={d3Chart}
                     isPreview={isPreviewingDirectory}
+                    onFocusDirectory={focusDirectory}
                   ></ParentFolder>
                 )}
                 {scannedAtText && (
@@ -605,29 +615,34 @@ const Scanning = () => {
                     )}
                   </div>
                 )}
-                <Droppable droppableId="filelist">
+                <Droppable
+                  key={`filelist-${listedDirectoryId}`}
+                  droppableId={`filelist-${listedDirectoryId}`}
+                >
                   {(provided) => (
                     <div
+                      key={listedDirectoryId}
+                      data-testid="sidebar-file-list"
+                      data-directory-id={listedDirectoryId}
+                      data-preview={isPreviewingDirectory ? "true" : "false"}
                       className="overflow-y-auto"
                       style={{ flex: "1 1 auto", height: 100 }}
                       ref={provided.innerRef}
                       {...provided.droppableProps}
                     >
-                      {listedDirectory &&
-                        listedDirectory.children &&
-                        listedDirectory.children.map((c, index) => (
-                          <FileLine
-                            key={c.data.id}
-                            item={c}
-                            hoveredItem={hoveredItem}
-                            d3Chart={d3Chart}
-                            index={index}
-                            deleteMap={deleteMap.current}
-                            color={getChartColor(c)}
-                            onHover={hoverListItem}
-                            onHoverEnd={clearHoveredItem}
-                          ></FileLine>
-                        ))}
+                      {listedChildren.map((c, index) => (
+                        <FileLine
+                          key={c.data.id}
+                          item={c}
+                          hoveredItem={hoveredItem}
+                          index={index}
+                          deleteMap={deleteMap.current}
+                          color={getChartColor(c)}
+                          onHover={hoverListItem}
+                          onHoverEnd={clearHoveredItem}
+                          onOpenDirectory={focusDirectory}
+                        ></FileLine>
+                      ))}
 
                       {provided.placeholder}
                     </div>

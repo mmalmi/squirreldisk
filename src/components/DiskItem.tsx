@@ -132,6 +132,8 @@ const DiskItem = ({
         openDisk();
       }}
       className="text-white p-4 flex gap-4 items-center hover:bg-gray-800 cursor-pointer"
+      data-testid="disk-row"
+      data-disk-path={disk.sMountPoint}
     >
       <img src={icona} className="w-16 h-16"></img>
       <div className="flex-1">

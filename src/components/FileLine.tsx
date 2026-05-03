@@ -8,24 +8,24 @@ import { invoke } from "@tauri-apps/api/core";
 interface FileLineProps {
   item: D3HierarchyDiskItem;
   hoveredItem: DiskItem | null;
-  d3Chart: any;
   index: number;
   deleteMap: Map<string, boolean>;
   color: string;
   onHover: (item: D3HierarchyDiskItem) => void;
   onHoverEnd: () => void;
+  onOpenDirectory: (item: D3HierarchyDiskItem) => void;
 }
 
 const mul = window.OS_TYPE === "windows" ? 1024 : 1000;
 export const FileLine = ({
   item,
   hoveredItem,
-  d3Chart,
   index,
   deleteMap,
   color,
   onHover,
   onHoverEnd,
+  onOpenDirectory,
 }: FileLineProps) => {
   const isRestricted = !!item.data.restricted;
   const isDirectory = !!item.data.isDirectory || !!item.children;
@@ -55,11 +55,14 @@ export const FileLine = ({
             isRestricted
               ? invoke("show_in_folder", { path: buildFullPath(item) })
               : isDirectory
-              ? d3Chart.current?.focusDirectory(item)
+              ? onOpenDirectory(item)
               : invoke("show_in_folder", { path: buildFullPath(item) });
           }}
           onMouseEnter={() => onHover(item)}
           onMouseLeave={onHoverEnd}
+          data-testid="sidebar-entry"
+          data-entry-id={item.data.id}
+          data-directory={isDirectory ? "true" : "false"}
           title={
             isRestricted
               ? item.data.restrictedPath || item.data.restrictedReason

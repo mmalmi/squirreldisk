@@ -2,13 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { buildFullPath } from "../pruneData";
 interface ParentFolderProps {
   focusedDirectory: D3HierarchyDiskItem;
-  d3Chart: any;
   isPreview?: boolean;
+  onFocusDirectory: (node: D3HierarchyDiskItem) => void;
 }
 export const ParentFolder = ({
   focusedDirectory,
-  d3Chart,
   isPreview = false,
+  onFocusDirectory,
 }: ParentFolderProps) => {
   const mul = window.OS_TYPE === "windows" ? 1024 : 1000;
   return (
@@ -20,12 +20,15 @@ export const ParentFolder = ({
       }}
       onClick={() => {
         if (isPreview) {
-          d3Chart.current.focusDirectory(focusedDirectory);
+          onFocusDirectory(focusedDirectory);
         } else if (focusedDirectory.parent) {
-          d3Chart.current.backToParent(focusedDirectory.parent);
+          onFocusDirectory(focusedDirectory.parent);
         }
         /*window.electron.diskUtils.openPath(buildFullPath(focusedDirectory));*/
       }}
+      data-testid="sidebar-directory"
+      data-directory-id={focusedDirectory.data.id}
+      data-preview={isPreview ? "true" : "false"}
     >
       <div className="truncate pr-6 flex-1 text-xs">
         {focusedDirectory &&
