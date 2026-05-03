@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.9
+
+- Removed the third-party Headway changelog widget and its external script.
+- Keeps the Windows scan fix from v0.3.8.
+
 ## v0.3.8
 
 - Fixed Windows scans by skipping `pdu` hardlink/shared-output flags that the Windows build cannot support.

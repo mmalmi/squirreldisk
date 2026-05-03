@@ -44,7 +44,7 @@
   },
   "productName": "SquirrelDisk",
   "mainBinaryName": "squirrel-disk",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "identifier": "com.squirreldisk.dev",
   "plugins": {
     "updater": {

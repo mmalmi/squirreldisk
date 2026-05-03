@@ -81,15 +81,6 @@ const DiskList = () => {
     };
   }, []);
 
-  useEffect(() => {
-    var config = {
-      selector: ".inject_here",
-      account: "xYZ8B7",
-    };
-    if (window.Headway) {
-      window.Headway.init(config);
-    }
-  }, []);
   return (
     <div className="flex-1 flex flex-col">
       <div className="text-white flex-1">
@@ -138,9 +129,7 @@ const DiskList = () => {
         </div>
       </div>
       <div className="p-4 text-white justify-end opacity-20 w-full flex">
-        <div>
-          <div className="inline-block inject_here"></div> v. {appVersion}
-        </div>
+        <div>v. {appVersion}</div>
       </div>
     </div>
   );
