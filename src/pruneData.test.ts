@@ -117,6 +117,49 @@ describe("scan tree path shaping", () => {
     ]);
   });
 
+  it("nests restricted subdirs into existing pdu folders that have no isDirectory flag", () => {
+    const root = {
+      name: "C:/",
+      size: 1000,
+      value: 1000,
+      children: [
+        {
+          name: "Program Files",
+          size: 600,
+          value: 600,
+          children: [
+            { name: "Mozilla Firefox", size: 600, value: 600, children: [] },
+          ],
+        },
+      ],
+    };
+
+    const withRestricted = addRestrictedPathsToTree(root, "C:/", [
+      {
+        path: "C:\\Program Files\\WindowsApps",
+        operation: "read_dir",
+        message: "Access is denied.",
+      },
+    ]);
+
+    const programFiles = withRestricted.children.filter(
+      (child: DiskItem) => child.name === "Program Files"
+    );
+
+    expect(programFiles).toHaveLength(1);
+    expect(programFiles[0].children.map((c: DiskItem) => c.name)).toEqual([
+      "Mozilla Firefox",
+      "WindowsApps",
+    ]);
+    const restrictedChild = programFiles[0].children.find(
+      (c: DiskItem) => c.name === "WindowsApps"
+    );
+    expect(restrictedChild).toMatchObject({
+      restricted: true,
+      restrictedReason: "Access is denied.",
+    });
+  });
+
   it("adds inaccessible folders inside the scanned tree", () => {
     const root = itemMap({
       name: "/",

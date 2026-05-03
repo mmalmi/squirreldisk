@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 #![allow(unexpected_cfgs)]
+mod privacy;
 mod scan;
 mod snapshots;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -78,6 +79,8 @@ fn main() {
             show_in_folder,
             delete_permanently,
             open_full_disk_access_settings,
+            privacy::get_privacy_access_status,
+            privacy::request_privacy_access,
             snapshots::get_scan_snapshot,
             snapshots::list_scan_snapshots,
             snapshots::save_scan_snapshot,

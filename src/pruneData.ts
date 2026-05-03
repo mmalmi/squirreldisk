@@ -107,7 +107,7 @@ const insertAbsoluteChild = (parent: any, parts: Array<string>, node: any) => {
   }
 
   let group = parent.children.find(
-    (child: any) => child.name === part && child.isDirectory
+    (child: any) => child.name === part && isDirectoryLike(child)
   );
   if (!group) {
     group = makeGroupNode(part);
@@ -145,7 +145,7 @@ const insertRestrictedPath = (
 
   const [part, ...rest] = parts;
   let child = parent.children?.find(
-    (entry: any) => entry.name === part && entry.isDirectory
+    (entry: any) => entry.name === part && isDirectoryLike(entry)
   );
 
   if (rest.length === 0) {

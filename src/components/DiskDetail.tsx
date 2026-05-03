@@ -30,6 +30,13 @@ interface ScanStatus {
   errors: number;
 }
 
+interface PrivacyAccessStatus {
+  platform: string;
+  hasAccess: boolean;
+  canElevate: boolean;
+  label: string;
+}
+
 interface DeleteFailure {
   id: string;
   name: string;
@@ -128,6 +135,8 @@ const Scanning = () => {
   const [scannedAt, setScannedAt] = useState<number | null>(null);
   const [deleteState, setDeleteState] =
     useState<DeleteState>(emptyDeleteState);
+  const [privacyStatus, setPrivacyStatus] =
+    useState<PrivacyAccessStatus | null>(null);
 
   const [deleteList, setDeleteList] = useState<Array<D3HierarchyDiskItem>>([]);
   const deleteMap = useRef<Map<string, boolean>>(new Map());
@@ -320,12 +329,41 @@ const Scanning = () => {
     deleteState.total > 0
       ? Math.min((deleteState.current / deleteState.total) * 100, 100)
       : 0;
-  const shouldOfferFullDiskAccess =
-    window.OS_TYPE === "macos" &&
-    ((status?.errors || 0) >= 10 || restrictedPaths.length >= 10);
-  const openFullDiskAccessSettings = () => {
-    invoke("open_full_disk_access_settings").catch(console.error);
+  const refreshPrivacyStatus = () => {
+    invoke<PrivacyAccessStatus>("get_privacy_access_status")
+      .then(setPrivacyStatus)
+      .catch(console.error);
   };
+  useEffect(() => {
+    refreshPrivacyStatus();
+    const onFocus = () => refreshPrivacyStatus();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+  const errorsCount = status?.errors || restrictedPaths.length;
+  const privacyPlatform = privacyStatus?.platform;
+  const isPrivacyOSSupported =
+    privacyPlatform === "macos" || privacyPlatform === "windows";
+  const shouldOfferFullDiskAccess =
+    isPrivacyOSSupported &&
+    privacyStatus?.hasAccess === false &&
+    privacyStatus?.canElevate !== false &&
+    errorsCount >= 10;
+  const showAccessGrantedBadge =
+    isPrivacyOSSupported && privacyStatus?.hasAccess === true && errorsCount > 0;
+  const requestPrivacyAccess = () => {
+    invoke("request_privacy_access")
+      .then(() => {
+        if (privacyPlatform === "macos") {
+          window.setTimeout(refreshPrivacyStatus, 1500);
+        }
+      })
+      .catch(console.error);
+  };
+  const accessButtonLabel =
+    privacyPlatform === "windows"
+      ? "Relaunch as Administrator"
+      : privacyStatus?.label || "Full Disk Access";
   const cancelPendingDelete = () => {
     cancelDeleteRef.current = true;
     setDeleteState(emptyDeleteState);
@@ -524,11 +562,16 @@ const Scanning = () => {
               <div className="mt-3 text-center">
                 <button
                   type="button"
-                  onClick={openFullDiskAccessSettings}
+                  onClick={requestPrivacyAccess}
                   className="rounded bg-gray-800 px-3 py-1 text-xs font-medium text-gray-200 hover:bg-gray-700"
                 >
-                  Full Disk Access
+                  {accessButtonLabel}
                 </button>
+              </div>
+            )}
+            {showAccessGrantedBadge && (
+              <div className="mt-3 text-center text-[11px] text-emerald-300">
+                {privacyStatus?.label} granted
               </div>
             )}
           </div>
@@ -604,15 +647,19 @@ const Scanning = () => {
                     <span>
                       {restrictedPaths.length.toLocaleString()} restricted
                     </span>
-                    {shouldOfferFullDiskAccess && (
+                    {shouldOfferFullDiskAccess ? (
                       <button
                         type="button"
-                        onClick={openFullDiskAccessSettings}
+                        onClick={requestPrivacyAccess}
                         className="rounded bg-rose-900/60 px-2 py-1 font-medium hover:bg-rose-800"
                       >
-                        Full Disk Access
+                        {accessButtonLabel}
                       </button>
-                    )}
+                    ) : showAccessGrantedBadge ? (
+                      <span className="text-emerald-300">
+                        {privacyStatus?.label} granted
+                      </span>
+                    ) : null}
                   </div>
                 )}
                 <Droppable
