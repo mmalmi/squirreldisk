@@ -550,7 +550,14 @@ function buildMacosArtifacts({ env, tag, artifactDir, dryRun, builtLines, includ
   const targetDir = join(cargoTargetRoot(env), target, 'release', 'bundle')
   const appPath = newestFile(walkDirectories(targetDir).filter((path) => path.endsWith('.app')))
   const bundleFiles = walkFiles(targetDir)
-  const appTarPath = newestFile(bundleFiles.filter((path) => path.endsWith('.app.tar.gz')))
+  // Tauri only writes its own .app.tar.gz when `bundle.createUpdaterArtifacts`
+  // is true, which couples to the official tauri-plugin-updater (minisign).
+  // We're using tauri-plugin-hashtree-updater, so derive the tarball path
+  // from the .app and produce it ourselves with `ditto` below.
+  let appTarPath = newestFile(bundleFiles.filter((path) => path.endsWith('.app.tar.gz')))
+  if (!appTarPath && appPath && includeUpdaterArtifacts) {
+    appTarPath = `${appPath}.tar.gz`
+  }
   const dmgPath = newestFile(bundleFiles.filter((path) => path.endsWith('.dmg')))
 
   if (!dryRun && (!appPath || !dmgPath || (includeUpdaterArtifacts && !appTarPath))) {
