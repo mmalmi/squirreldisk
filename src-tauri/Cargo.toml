@@ -28,6 +28,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-os = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-hashtree-updater = { path = "../../hashtree/rust/crates/tauri-plugin-hashtree-updater" }
 
 [target."cfg(target_os = \"windows\")".dependencies]
 windows-sys = { version = "0.45.0", features = [

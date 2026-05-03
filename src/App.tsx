@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { MemoryRouter as Router, Route, Routes } from "react-router-dom";
 
 import TitleBar from "./components/TitleBar";
 import DiskList from "./components/DiskList";
 import DiskDetail from "./components/DiskDetail";
+import Settings from "./components/Settings";
+import UpdateBanner from "./components/UpdateBanner";
 
 import { platform } from "@tauri-apps/plugin-os";
 
@@ -24,9 +25,11 @@ function App() {
         }
       >
         <TitleBar></TitleBar>
+        <UpdateBanner />
         <Routes>
           <Route path="/" element={<DiskList />} />
           <Route path="/disk" element={<DiskDetail />} />
+          <Route path="/settings" element={<Settings />} />
         </Routes>
       </div>
     </Router>

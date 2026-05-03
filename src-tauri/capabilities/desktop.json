@@ -55,6 +55,7 @@
     "dialog:allow-confirm",
     "dialog:allow-open",
     "os:allow-platform",
-    "os:allow-os-type"
+    "os:allow-os-type",
+    "hashtree-updater:default"
   ]
 }
