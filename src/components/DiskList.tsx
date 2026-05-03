@@ -17,7 +17,6 @@ import {
 declare global {
   interface Window {
     electron: any;
-    analytics: any;
     configStore: any;
     licver: any;
   }

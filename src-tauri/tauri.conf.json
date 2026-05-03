@@ -39,21 +39,12 @@
       "deb": {
         "depends": []
       }
-    },
-    "createUpdaterArtifacts": "v1Compatible"
+    }
   },
   "productName": "SquirrelDisk",
   "mainBinaryName": "squirrel-disk",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "identifier": "com.squirreldisk.dev",
-  "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk3QjIwNUJBRkM0MDE0OTUKUldTVkZFRDh1Z1d5bHdSbS85UmovVUdiOHk1dy9zTnZzb2xtb0ppbGIzS3E3NUdHUnB1QldjRVAK",
-      "endpoints": [
-        "https://www.squirreldisk.com/api/updates/{{target}}/{{current_version}}"
-      ]
-    }
-  },
   "app": {
     "windows": [
       {

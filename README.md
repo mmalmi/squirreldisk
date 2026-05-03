@@ -1,24 +1,5 @@
 # SquirrelDisk
 
-<br>
-
-<p align="center">
-    <a href="https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk?tab=releases"><img src="https://img.shields.io/badge/version-v0.3.9-ff00a0?style=flat-square"></a>
-     &nbsp;
-      <a href="https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk"><img src="https://shields.io/badge/-ALPHA-orange?color=%23ff00a0&include_prereleases&label=status&sort=semver&style=flat-square"></a>
-    &nbsp;
-    <a href="https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk"><img src="https://img.shields.io/badge/built_with-Rust-dca282.svg?style=flat-square"></a>
-     &nbsp;
-     <a href="https://discord.gg/Xp8QtMM65w"><img src="https://img.shields.io/badge/Discord-%235865F2.svg?style=flat-square&logo=discord&logoColor=white"></a>
-   
-</p>
-
-<div align="center">
-
-[![Windows Support](https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk?tab=releases) [![Linux Support](https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk?tab=releases) [![macOS Support](https://img.shields.io/badge/macOS-adb8c5?style=for-the-badge&logo=macos&logoColor=white)](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk?tab=releases)
-
-</div>
-
 ![SquirrelDisk screenshot](public/squirreldisk.png)
 
 ## What's taking your hard disk space?
@@ -36,7 +17,6 @@ Some features:
 - Drag and drop: collect all items to be deleted
 - Right click on a folder/file to open the file explorer
 - Cross-platform macOS, Windows, Linux
-- Auto-updater: get notified when there is a new update (only on app launch - no notification spamming thanks)
 
 ## Source
 

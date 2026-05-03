@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.10
+
+- Removed unused Tauri HTTP and updater plugins, permissions, and updater endpoint configuration.
+- Removed stale analytics typing so the app runtime has no external widget, analytics, updater, or HTTP plugin path.
+- Removed external badge images from the README.
+- Keeps the Windows scan fix and Headway removal from v0.3.8-v0.3.9.
+
 ## v0.3.9
 
 - Removed the third-party Headway changelog widget and its external script.
