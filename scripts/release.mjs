@@ -576,7 +576,10 @@ function buildMacosArtifacts({ env, tag, artifactDir, dryRun, builtLines, includ
       if (!dryRun) {
         rmSync(appTarPath, { force: true })
       }
-      run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', appPath, appTarPath], { dryRun })
+      // hashtree-updater's AppBundle installer gunzips + untars the asset, so
+      // the .app.tar.gz must be a real tar.gz. `ditto -c -k` produces a PKZip
+      // regardless of the output extension, so use `tar -czf` directly.
+      run('tar', ['-czf', appTarPath, '-C', dirname(appPath), basename(appPath)], { dryRun })
     }
     createDmgFromApp({ appPath, dmgPath, dryRun })
     notarizeAndStapleDmg({ dmgPath, authArgs, dryRun })
