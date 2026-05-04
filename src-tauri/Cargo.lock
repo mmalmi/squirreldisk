@@ -2002,7 +2002,9 @@ checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
 
 [[package]]
 name = "hashtree-blossom"
-version = "0.2.44"
+version = "0.2.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "381ea1e98c1bafdc149ac981654937636cd6671b1b2d989583e37bf43a3f88ad"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2020,7 +2022,9 @@ dependencies = [
 
 [[package]]
 name = "hashtree-config"
-version = "0.2.44"
+version = "0.2.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c9c81d6bb1a8ef1d4bbfd36f462af4473ad60fa0b990d03503cb9d66818d0c7"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
@@ -2030,7 +2034,9 @@ dependencies = [
 
 [[package]]
 name = "hashtree-core"
-version = "0.2.44"
+version = "0.2.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98e47feeeb9691a7b4e6f397a0603ba6bac9efc519c75b5b2d33018931355a79"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -2049,7 +2055,9 @@ dependencies = [
 
 [[package]]
 name = "hashtree-resolver"
-version = "0.2.44"
+version = "0.2.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abcb835fe2c00ea4206b951754813733b32a0138e1bf1491f13d0bc51b9fee2c"
 dependencies = [
  "async-trait",
  "hashtree-core",
@@ -2061,7 +2069,9 @@ dependencies = [
 
 [[package]]
 name = "hashtree-updater"
-version = "0.2.44"
+version = "0.2.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2474b349b38e439c02c650feac5a159ed47f81a7f4331504058f9cdc6006bd0c"
 dependencies = [
  "flate2",
  "hashtree-core",
@@ -5364,7 +5374,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-hashtree-updater"
-version = "0.2.44"
+version = "0.2.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28f20d2ef56589ae1097651a3dfae712fb0fb4e434b3b069a1c2c552aa419f6d"
 dependencies = [
  "hashtree-blossom",
  "hashtree-core",
