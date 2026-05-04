@@ -1169,9 +1169,18 @@ function main() {
     })],
   ]
 
+  // Track skip/fail reasons per platform so the gate can distinguish "you
+  // explicitly opted out via --skip" from "your host couldn't build this and
+  // we'd silently publish a partial release".
+  const platformSteps = ['macos', 'linux', 'windows']
+  const cliSkippedPlatforms = []
+  const envSkippedPlatforms = []
+  const failedPlatforms = []
+
   for (const [name, fn] of steps) {
     if ((name === 'verify' && options.skipVerify) || !shouldRunStep(name, options)) {
       skippedLines.push(`${name} skipped by CLI options.`)
+      if (platformSteps.includes(name)) cliSkippedPlatforms.push(name)
       continue
     }
 
@@ -1183,18 +1192,28 @@ function main() {
     } catch (error) {
       if (error instanceof SkipStepError) {
         skippedLines.push(error.message)
+        if (platformSteps.includes(name)) envSkippedPlatforms.push({ name, reason: error.message })
         continue
       }
       if (name === 'verify') {
         throw error
       }
       skippedLines.push(`${name} build failed: ${error.message}`)
+      if (platformSteps.includes(name)) failedPlatforms.push({ name, reason: error.message })
     }
   }
 
-  const failedLines = skippedLines.filter((line) => line.includes(' build failed:'))
-  if (failedLines.length > 0 && !allowPartial) {
-    throw new Error(`Refusing to publish a partial release:\n${failedLines.join('\n')}`)
+  if (!allowPartial) {
+    const blockingLines = [
+      ...failedPlatforms.map(({ name, reason }) => `${name} build failed: ${reason}`),
+      ...envSkippedPlatforms.map(({ name, reason }) => `${name} skipped (host can't build): ${reason}`),
+    ]
+    if (blockingLines.length > 0) {
+      const hint = envSkippedPlatforms.length > 0
+        ? '\n\nRun on a host that can build all targets (e.g. macOS with Docker for Linux + Parallels for Windows), or pass --skip <platform> for the ones you intentionally don\'t want, or pass --allow-partial to override.'
+        : ''
+      throw new Error(`Refusing to publish a partial release:\n${blockingLines.join('\n')}${hint}`)
+    }
   }
 
   const commit = resolveReleaseCommit(tag, { dryRun: options.dryRun })
