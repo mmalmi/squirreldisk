@@ -16,7 +16,6 @@ import { ParentFolder } from "./ParentFolder";
 import { DragDropContext, Droppable } from "react-beautiful-dnd";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { confirm } from "@tauri-apps/plugin-dialog";
 import { getChartColor } from "../chartColors";
 import { getCachedScan, setCachedScan } from "../scanCache";
 import { formatScannedAt } from "../scanTime";
@@ -374,22 +373,6 @@ const Scanning = () => {
     }
 
     const selected = [...deleteList];
-    const accepted = await confirm(
-      `Permanently delete ${selected.length} item${
-        selected.length === 1 ? "" : "s"
-      } and reclaim about ${prettyBytes(selectedDeleteBytes)}? This cannot be undone.`,
-      {
-        title: "Delete permanently?",
-        kind: "warning",
-        okLabel: "Delete",
-        cancelLabel: "Cancel",
-      }
-    );
-
-    if (!accepted) {
-      return;
-    }
-
     const successful: Array<D3HierarchyDiskItem> = [];
     const failures: Array<DeleteFailure> = [];
     let recoveredBytes = 0;
