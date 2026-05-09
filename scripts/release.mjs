@@ -68,8 +68,9 @@ Environment:
   SQD_LINUX_DOCKER_IMAGE   Default: squirreldisk-tauri-linux-release:<arch>
   SQD_LINUX_CARGO_JOBS     Default: 1 inside Docker for reproducible builds
   SQD_PDU_VERSION          Default: 0.23.0
-  SQD_WINDOWS_VM_NAME
-  SQD_WINDOWS_SHARED_REPO_PATH
+  SQD_WINDOWS_SSH_HOST       SSH host running Windows (default: win11-dev)
+  SQD_WINDOWS_VM_NAME        Legacy alias for SQD_WINDOWS_SSH_HOST
+  SQD_WINDOWS_GUEST_REPO_PATH  Repo path on the Windows host (default: C:\\src\\squirreldisk)
 `)
 }
 
@@ -799,20 +800,6 @@ function buildLinuxArtifacts({ env, tag, artifactDir, dryRun, builtLines, includ
   }
 }
 
-function defaultSharedWindowsRepoPath() {
-  if (process.platform !== 'darwin') {
-    return null
-  }
-
-  const homeDir = os.homedir()
-  if (!repoRoot.startsWith(`${homeDir}/`)) {
-    return null
-  }
-
-  const relative = repoRoot.slice(homeDir.length + 1).split('/').join('\\')
-  return `C:\\Mac\\Home\\${relative}`
-}
-
 function psQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`
 }
@@ -821,98 +808,120 @@ function encodePowerShellScript(script) {
   return Buffer.from(script, 'utf16le').toString('base64')
 }
 
-function runWindowsPowerShell(vmName, script, { dryRun = false } = {}) {
+function runWindowsPowerShell(host, script, { capture = false, dryRun = false } = {}) {
   const encoded = encodePowerShellScript(script)
   return run(
-    'prlctl',
-    ['exec', vmName, '--current-user', 'powershell.exe', '-NoProfile', '-EncodedCommand', encoded],
-    { dryRun },
+    'ssh',
+    [host, 'powershell.exe', '-NoProfile', '-EncodedCommand', encoded],
+    { capture, dryRun },
   )
 }
 
-function autoDetectWindowsVmName(prlctlListOutput) {
-  const candidates = []
-  for (const line of prlctlListOutput.split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed.startsWith('{')) {
-      continue
-    }
+function syncRepoToWindowsHost({ host, guestRepo, dryRun }) {
+  const guestRepoForward = guestRepo.replace(/\\/g, '/')
+  const tarExcludes = [
+    '--exclude=./node_modules',
+    '--exclude=./dist',
+    '--exclude=./dist-ssr',
+    '--exclude=./.git',
+    '--exclude=./.local',
+    '--exclude=./src-tauri/target',
+  ].join(' ')
 
-    const match = trimmed.match(/^\{[^}]+\}\s+(\S+)\s+\S+\s+(.+)$/)
-    if (!match) {
-      continue
-    }
-
-    const status = match[1].toLowerCase()
-    const name = match[2].trim()
-    if ((status === 'running' || status === 'suspended') && /windows/i.test(name)) {
-      candidates.push(name)
-    }
+  runWindowsPowerShell(
+    host,
+    `New-Item -ItemType Directory -Force -Path ${psQuote(guestRepo)} | Out-Null`,
+    { dryRun },
+  )
+  if (dryRun) {
+    console.log(`[dry] tar ${tarExcludes} -cf - -C ${repoRoot} . | ssh ${host} tar -xf - -C ${guestRepoForward}`)
+    return
   }
+  const result = spawnSync(
+    'bash',
+    [
+      '-c',
+      `tar ${tarExcludes} -cf - -C ${quote(repoRoot)} . | ssh ${quote(host)} tar -xf - -C ${quote(guestRepoForward)}`,
+    ],
+    { stdio: ['ignore', 'inherit', 'inherit'] },
+  )
+  if (result.status !== 0) {
+    throw new Error(`tar | ssh sync to ${host} failed (exit ${result.status})`)
+  }
+}
 
-  return candidates.length === 1 ? candidates[0] : null
+function pullDirFromWindowsHost({ host, guestRoot, localTargetDir, dryRun }) {
+  const guestRootForward = guestRoot.replace(/\\/g, '/')
+  if (dryRun) {
+    console.log(`[dry] ssh ${host} tar -cf - -C ${guestRootForward} . | tar -xf - -C ${localTargetDir}`)
+    return
+  }
+  const result = spawnSync(
+    'bash',
+    [
+      '-c',
+      `ssh ${quote(host)} tar -cf - -C ${quote(guestRootForward)} . | tar -xf - -C ${quote(localTargetDir)}`,
+    ],
+    { stdio: ['ignore', 'inherit', 'inherit'] },
+  )
+  if (result.status !== 0) {
+    throw new Error(`tar pull from ${host}:${guestRoot} failed (exit ${result.status})`)
+  }
 }
 
 function buildWindowsArtifacts({ env, tag, artifactDir, dryRun, builtLines, includeUpdaterArtifacts, includeExtraPackages }) {
-  if (process.platform !== 'darwin') {
-    throw new SkipStepError('Windows artifacts are only wired for macOS hosts with Parallels.')
-  }
-  if (!commandExists('prlctl')) {
-    throw new SkipStepError('Windows artifacts require prlctl.')
+  // Windows builds run on win11-dev — an x86_64 Windows VM reachable over the
+  // Nostr VPN mesh (see ~/.claude/CLAUDE.md). Set SQD_WINDOWS_SSH_HOST or the
+  // legacy SQD_WINDOWS_VM_NAME to override.
+  const host = env.SQD_WINDOWS_SSH_HOST || env.SQD_WINDOWS_VM_NAME || 'win11-dev'
+
+  if (!dryRun) {
+    const probe = spawnSync(
+      'ssh',
+      ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', host, 'whoami'],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    )
+    if (probe.status !== 0) {
+      throw new SkipStepError(
+        `Skipping Windows artifacts because ssh ${host} is unreachable. ` +
+          'Bring up the VM and ensure VPN is connected, or set SQD_WINDOWS_SSH_HOST.',
+      )
+    }
   }
 
-  const sharedRepoPath = env.SQD_WINDOWS_SHARED_REPO_PATH || defaultSharedWindowsRepoPath()
-  if (!sharedRepoPath) {
-    throw new SkipStepError('Windows shared repo path could not be derived; set SQD_WINDOWS_SHARED_REPO_PATH.')
-  }
+  const guestRepo = env.SQD_WINDOWS_GUEST_REPO_PATH || 'C:\\src\\squirreldisk'
 
-  const vmName =
-    env.SQD_WINDOWS_VM_NAME ||
-    autoDetectWindowsVmName(run('prlctl', ['list', '-a'], { capture: true, dryRun }))
-  if (!vmName) {
-    throw new SkipStepError('No unique running Windows VM was detected; set SQD_WINDOWS_VM_NAME.')
-  }
+  syncRepoToWindowsHost({ host, guestRepo, dryRun })
 
   const rawOutDir = join(artifactDir, 'windows-raw')
   if (!dryRun) {
     rmSync(rawOutDir, { recursive: true, force: true })
     mkdirSync(rawOutDir, { recursive: true })
   }
-  const sharedRawOutDir = `${sharedRepoPath}\\.local\\release-artifacts\\${tag}\\windows-raw`
+  const guestRawOutDir = `${guestRepo}\\.local\\release-artifacts\\${tag}\\windows-raw`
 
   let buildError = null
   try {
     runWindowsPowerShell(
-      vmName,
+      host,
       `
 $ErrorActionPreference = 'Stop'
-$sharedRepo = ${psQuote(sharedRepoPath)}
-$guestRepo = Join-Path $env:USERPROFILE 'src\\squirreldisk'
-$guestRoot = Split-Path $guestRepo
-New-Item -ItemType Directory -Force -Path $guestRoot | Out-Null
-$skipRelDirs = @('node_modules', 'dist', 'dist-ssr', '.git', '.local', 'src-tauri\\target')
-$skipDirs = @()
-foreach ($relDir in $skipRelDirs) {
-  $skipDirs += (Join-Path $sharedRepo $relDir)
-  $skipDirs += (Join-Path $guestRepo $relDir)
-}
-robocopy $sharedRepo $guestRepo /MIR /NFL /NDL /NJH /NJS /NC /NS /NP /XD $skipDirs /XF .DS_Store | Out-Null
-$rc = $LASTEXITCODE
-if ($rc -ge 8) { throw "robocopy failed with code $rc" }
-Set-Location $guestRepo
+Set-Location ${psQuote(guestRepo)}
 rustup target add x86_64-pc-windows-msvc | Out-Null
 npm.cmd ci
 npm.cmd run tauri -- build --target x86_64-pc-windows-msvc --ci
-$bundleRoot = Join-Path $guestRepo 'src-tauri\\target\\x86_64-pc-windows-msvc\\release\\bundle'
+$bundleRoot = Join-Path ${psQuote(guestRepo)} 'src-tauri\\target\\x86_64-pc-windows-msvc\\release\\bundle'
 if (!(Test-Path $bundleRoot)) { throw "Missing bundle output at $bundleRoot" }
-$sharedOut = ${psQuote(sharedRawOutDir)}
-New-Item -ItemType Directory -Force -Path $sharedOut | Out-Null
+$out = ${psQuote(guestRawOutDir)}
+if (Test-Path $out) { Remove-Item -Recurse -Force $out }
+New-Item -ItemType Directory -Force -Path $out | Out-Null
 Get-ChildItem $bundleRoot -Recurse -File -Include '*.exe','*.msi','*.zip','*.sig' | ForEach-Object {
-  Copy-Item $_.FullName (Join-Path $sharedOut $_.Name) -Force
+  Copy-Item $_.FullName (Join-Path $out $_.Name) -Force
 }
 `,
       { dryRun },
     )
+    pullDirFromWindowsHost({ host, guestRoot: guestRawOutDir, localTargetDir: rawOutDir, dryRun })
   } catch (error) {
     buildError = error
   }
