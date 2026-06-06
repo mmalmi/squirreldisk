@@ -16,7 +16,9 @@ import { FileLine } from "./FileLine";
 import { ParentFolder } from "./ParentFolder";
 import { DragDropContext, Droppable } from "react-beautiful-dnd";
 import { invoke } from "@tauri-apps/api/core";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getChartColor } from "../chartColors";
 import { getCachedScan, setCachedScan } from "../scanCache";
 import { formatScannedAt } from "../scanTime";
@@ -110,7 +112,47 @@ const findNodeByFullPath = (
   );
 };
 
-const isDirectoryNode = (node: D3HierarchyDiskItem | null) =>
+const parentPath = (path: string) => {
+  const normalized = normalizePathText(path);
+  if (normalized === "/") {
+    return "/";
+  }
+
+  const index = normalized.lastIndexOf("/");
+  return index <= 0 ? "/" : normalized.slice(0, index);
+};
+
+const findNearestDirectoryByFullPath = (
+  root: D3HierarchyDiskItem,
+  path: string
+): D3HierarchyDiskItem => {
+  const rootPath = normalizeNodePath(root);
+  let candidatePath = normalizePathText(path);
+
+  while (true) {
+    const candidate = findNodeByFullPath(root, candidatePath);
+    if (isDirectoryNode(candidate)) {
+      return candidate;
+    }
+
+    if (
+      candidatePath === rootPath ||
+      (rootPath !== "/" && !candidatePath.startsWith(`${rootPath}/`))
+    ) {
+      return root;
+    }
+
+    const nextPath = parentPath(candidatePath);
+    if (nextPath === candidatePath) {
+      return root;
+    }
+    candidatePath = nextPath;
+  }
+};
+
+const isDirectoryNode = (
+  node: D3HierarchyDiskItem | null
+): node is D3HierarchyDiskItem =>
   !!node && (!!node.data.isDirectory || !!node.children);
 
 const isSyntheticNode = (node: D3HierarchyDiskItem | null) =>
@@ -191,6 +233,7 @@ const Scanning = () => {
   const [deleteList, setDeleteList] = useState<Array<D3HierarchyDiskItem>>([]);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const deleteMap = useRef<Map<string, boolean>>(new Map());
+  const deleteListRef = useRef<Array<D3HierarchyDiskItem>>([]);
   const cancelDeleteRef = useRef(false);
   const updateScannedAt = (value: number | null) => {
     scannedAtRef.current = value;
@@ -241,6 +284,11 @@ const Scanning = () => {
   const syncDeleteMap = (nodes: Array<D3HierarchyDiskItem>) => {
     deleteMap.current = new Map(nodes.map((node) => [node.data.id, true]));
   };
+  const setCollectorNodes = (nodes: Array<D3HierarchyDiskItem>) => {
+    deleteListRef.current = nodes;
+    syncDeleteMap(nodes);
+    setDeleteList(nodes);
+  };
   const getCollectorBlockReason = (
     node: D3HierarchyDiskItem,
     selected = deleteList
@@ -273,16 +321,14 @@ const Scanning = () => {
 
     cancelDeleteRef.current = false;
     setDeleteState(emptyDeleteState);
-    setDeleteList((current) => {
-      if (getCollectorBlockReason(node, current)) {
-        return current;
-      }
+    if (getCollectorBlockReason(node, deleteListRef.current)) {
+      return;
+    }
 
-      const next = current.filter((entry) => !isAncestorNode(node, entry));
-      next.push(node);
-      syncDeleteMap(next);
-      return next;
-    });
+    const next = deleteListRef.current.filter(
+      (entry) => !isAncestorNode(node, entry)
+    );
+    setCollectorNodes([...next, node]);
   };
   const showNodeInFolder = (node: D3HierarchyDiskItem) => {
     if (isSyntheticNode(node)) {
@@ -447,6 +493,52 @@ const Scanning = () => {
   }, [disk, forceScan, used]);
 
   useEffect(() => {
+    deleteListRef.current = deleteList;
+  }, [deleteList]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+
+    getCurrentWindow()
+      .onCloseRequested(async (event) => {
+        const selectedCount = deleteListRef.current.length;
+        if (selectedCount === 0) {
+          return;
+        }
+
+        const shouldClose = await confirm(
+          `The Collector still contains ${selectedCount} item${
+            selectedCount === 1 ? "" : "s"
+          }. Close SquirrelDisk anyway?`,
+          {
+            title: "Collector Not Empty",
+            kind: "warning",
+            okLabel: "Close",
+            cancelLabel: "Keep Open",
+          }
+        );
+
+        if (!shouldClose) {
+          event.preventDefault();
+        }
+      })
+      .then((handler) => {
+        if (disposed) {
+          handler();
+          return;
+        }
+        unlisten = handler;
+      })
+      .catch(console.error);
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!contextMenu) {
       return;
     }
@@ -472,44 +564,67 @@ const Scanning = () => {
     };
   }, [contextMenu]);
 
-  // Appena ho i dati
-  useEffect(() => {
-    if (view == "disk") {
-      // Remove old chart
-      d3.select(svgRef.current).selectAll("*").remove();
-
-      const rootDir = baseDataD3Hierarchy.current!;
-      setFocusedDirectoryNode(rootDir, false);
-
-      const base = baseDataD3Hierarchy.current!; //getViewNode(baseData.current!);
-
-      d3Chart.current = getChart(base, svgRef.current!, {
-        centerHover: (_, p) => {
-          // console.log({centerHover: p})
-          setHoveredItem({ ...p.data });
-          setPreviewDirectory(null);
-        },
-        arcHover: (_, p) => {
-          // console.log({arcHover: p})
-          setHoveredItem({ ...p.data });
-          setPreviewDirectory(isDirectoryNode(p) ? p : null);
-        },
-        arcContextMenu: (event, p) => {
-          openNodeContextMenu(event, p);
-          setPreviewDirectory(isDirectoryNode(p) ? p : null);
-        },
-        hoverCleared: () => {
-          clearHoveredItem();
-          clearPreviewDirectory();
-        },
-        arcClicked: (_, p) => {
-          clearPreviewDirectory();
-          setFocusedDirectoryNode(p);
-          return p;
-        },
-      });
+  const renderVisibleChart = (
+    collectorNodes = deleteListRef.current,
+    preferredFocusedPath =
+      focusedDirectory ? normalizeNodePath(focusedDirectory) : requestedFocusedPath
+  ) => {
+    if (view !== "disk" || !baseData.current || !svgRef.current) {
+      return;
     }
-  }, [view]);
+
+    const collectedIds = new Set(
+      collectorNodes.map((node) => node.data.id)
+    );
+    const visibleTree =
+      removeNodesFromTree(baseData.current, collectedIds).node ||
+      baseData.current;
+    const rootDir = diskItemToD3Hierarchy(visibleTree);
+    const focusedPath = preferredFocusedPath || normalizeNodePath(rootDir);
+    const focusedNode = findNearestDirectoryByFullPath(rootDir, focusedPath);
+
+    baseDataD3Hierarchy.current = rootDir;
+    d3.select(svgRef.current).selectAll("*").remove();
+    setPreviewDirectory(null);
+    setHoveredItem(null);
+    setContextMenu(null);
+
+    d3Chart.current = getChart(rootDir, svgRef.current, {
+      centerHover: (_, p) => {
+        setHoveredItem({ ...p.data });
+        setPreviewDirectory(null);
+      },
+      arcHover: (_, p) => {
+        setHoveredItem({ ...p.data });
+        setPreviewDirectory(isDirectoryNode(p) ? p : null);
+      },
+      arcContextMenu: (event, p) => {
+        openNodeContextMenu(event, p);
+        setPreviewDirectory(isDirectoryNode(p) ? p : null);
+      },
+      hoverCleared: () => {
+        clearHoveredItem();
+        clearPreviewDirectory();
+      },
+      arcClicked: (_, p) => {
+        clearPreviewDirectory();
+        setFocusedDirectoryNode(p);
+        return p;
+      },
+    });
+
+    if (focusedNode === rootDir) {
+      const shouldUpdateRoute =
+        normalizePathText(focusedPath) !== normalizeNodePath(rootDir);
+      setFocusedDirectoryNode(rootDir, shouldUpdateRoute);
+    } else {
+      d3Chart.current.focusDirectory(focusedNode);
+    }
+  };
+
+  useEffect(() => {
+    renderVisibleChart(deleteList);
+  }, [view, deleteList]);
 
   useEffect(() => {
     if (view !== "disk" || !requestedFocusedPath || !baseDataD3Hierarchy.current) {
@@ -708,9 +823,6 @@ const Scanning = () => {
         baseDataD3Hierarchy.current = diskItemToD3Hierarchy(updatedTree);
       }
 
-      d3Chart.current.deleteNodes(successful);
-      clearHoveredItem();
-
       if (baseData.current) {
         try {
           await setCachedScan({
@@ -729,8 +841,7 @@ const Scanning = () => {
 
     const failedIds = new Set(failures.map((failure) => failure.id));
     const survivingItems = selected.filter((node) => failedIds.has(node.data.id));
-    syncDeleteMap(survivingItems);
-    setDeleteList(survivingItems);
+    setCollectorNodes(survivingItems);
     setDeleteState({
       isDeleting: false,
       isCountingDown: false,
@@ -968,8 +1079,7 @@ const Scanning = () => {
                                 className="text-gray-300 underline underline-offset-2 hover:text-white disabled:opacity-40"
                                 disabled={deleteState.isDeleting}
                                 onClick={() => {
-                                  setDeleteList([]);
-                                  syncDeleteMap([]);
+                                  setCollectorNodes([]);
                                   cancelDeleteRef.current = false;
                                   setDeleteState(emptyDeleteState);
                                 }}

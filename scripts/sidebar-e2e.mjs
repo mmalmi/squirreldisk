@@ -536,27 +536,22 @@ const main = async () => {
     await waitFor(
       cdp,
       `document.querySelector('[data-testid="node-context-menu"]') === null
-        && document.querySelector('[data-testid="collector-drop-zone"]')?.textContent.includes('1 selected')`,
+        && document.querySelector('[data-testid="collector-drop-zone"]')?.textContent.includes('1 selected')
+        && document.querySelector('[data-testid="chart-arc"][data-node-id="${usersId}"]') === null
+        && document.querySelector('[data-testid="sidebar-entry"][data-entry-id="${usersId}"]') === null`,
     )
+    state = await sidebarState(cdp)
+    assertEntryIds(state, [libraryId, applicationsId], 'root entries after collecting Users')
 
-    await rightClick(cdp, `[data-testid="sidebar-entry"][data-entry-id="${usersId}"]`)
+    await click(cdp, '[data-testid="collector-drop-zone"] button')
     await waitFor(
       cdp,
-      `document.querySelector('[data-testid="context-menu-collect"]')?.disabled === true
-        && document.querySelector('[data-testid="context-menu-collect"]')?.textContent.includes('Already in Collector')`,
+      `document.querySelector('[data-testid="collector-drop-zone"]')?.textContent.includes('Drop files and folders here to collect')
+        && document.querySelector('[data-testid="chart-arc"][data-node-id="${usersId}"]') !== null
+        && document.querySelector('[data-testid="sidebar-entry"][data-entry-id="${usersId}"]') !== null`,
     )
-    await cdp.send('Input.dispatchKeyEvent', {
-      type: 'keyDown',
-      windowsVirtualKeyCode: 27,
-      key: 'Escape',
-      code: 'Escape',
-    })
-    await cdp.send('Input.dispatchKeyEvent', {
-      type: 'keyUp',
-      windowsVirtualKeyCode: 27,
-      key: 'Escape',
-      code: 'Escape',
-    })
+    state = await sidebarState(cdp)
+    assertEntryIds(state, [usersId, libraryId, applicationsId], 'root entries after clearing Collector')
 
     await mouseOver(cdp, `[data-testid="chart-arc"][data-node-id="${usersId}"]`)
     await waitFor(
