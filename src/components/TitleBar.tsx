@@ -49,7 +49,11 @@ const breadcrumbPaths = (rootPath: string, focusedPath: string) => {
 };
 
 const Separator = () => (
-  <span className="px-1 text-sm font-medium text-gray-600" aria-hidden="true">
+  <span
+    data-tauri-drag-region
+    className="px-1 text-sm font-medium text-gray-600"
+    aria-hidden="true"
+  >
     /
   </span>
 );
@@ -91,6 +95,7 @@ const TitleBar = () => {
   const pathCrumbs =
     pathname === "/disk" && diskPath ? breadcrumbPaths(diskPath, focusedPath) : [];
   const [plf, setPlf] = useState<Platform | undefined>();
+
   useEffect(() => {
     setPlf(platform());
   }, []);
@@ -107,14 +112,21 @@ const TitleBar = () => {
       ) : (
         <CloseButton></CloseButton>
       )}
-      <div className="min-w-0 flex-1 px-3 font-bold">
+      <div
+        data-tauri-drag-region
+        className="min-w-0 max-w-[calc(100%-7rem)] overflow-hidden px-3 font-bold"
+      >
         <nav
+          data-tauri-drag-region
           className="min-w-0 overflow-hidden navi"
           aria-label="Breadcrumb"
           data-testid="title-breadcrumb"
         >
-          <ol className="flex min-w-0 items-center overflow-hidden">
-            <li className="inline-flex items-center">
+          <ol
+            data-tauri-drag-region
+            className="flex min-w-0 items-center overflow-hidden"
+          >
+            <li data-tauri-drag-region className="inline-flex items-center">
               <Link
                 to="/"
                 data-testid="title-breadcrumb-all-disks"
@@ -125,8 +137,8 @@ const TitleBar = () => {
             </li>
 
             {pathname == "/disk" && diskPath && (
-              <li>
-                <div className="flex min-w-0 items-center">
+              <li data-tauri-drag-region>
+                <div data-tauri-drag-region className="flex min-w-0 items-center">
                   <Separator />
                   <Link
                     to="/disk"
@@ -150,12 +162,14 @@ const TitleBar = () => {
               return (
                 <li
                   key={crumb.path}
+                  data-tauri-drag-region
                   className="flex min-w-0 items-center"
                   aria-current={isCurrent ? "page" : undefined}
                 >
                   <Separator />
                   {isCurrent ? (
                     <span
+                      data-tauri-drag-region
                       data-testid="title-breadcrumb-current"
                       data-path={crumb.path}
                       className={`${breadcrumbCurrentClass} max-w-[10rem]`}
@@ -183,9 +197,15 @@ const TitleBar = () => {
               );
             })}
             {pathname == "/settings" && (
-              <li className="flex min-w-0 items-center" aria-current="page">
+              <li
+                data-tauri-drag-region
+                className="flex min-w-0 items-center"
+                aria-current="page"
+              >
                 <Separator />
-                <span className={breadcrumbCurrentClass}>Settings</span>
+                <span data-tauri-drag-region className={breadcrumbCurrentClass}>
+                  Settings
+                </span>
               </li>
             )}
           </ol>
