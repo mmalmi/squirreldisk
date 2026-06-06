@@ -20,7 +20,8 @@ Some features:
 
 ## Source
 
-- [Source repository](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk)
+- Main repository: [git.iris.to](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk)
+- GitHub mirror: [mmalmi/squirreldisk](https://github.com/mmalmi/squirreldisk)
 - [Releases](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/squirreldisk?tab=releases)
 
 ## Installation
