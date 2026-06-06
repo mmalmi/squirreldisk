@@ -2,16 +2,20 @@ import * as d3 from "d3";
 import prettyBytes from "pretty-bytes";
 import { getChartColor } from "./chartColors";
 
-var width = 600;
-var radius = width / 10;
-var arc = d3
+const width = 600;
+const visibleDescendantLevels = 8;
+const maxVisibleRadiusUnits = visibleDescendantLevels + 1;
+const radius = width / (2 * (maxVisibleRadiusUnits + 0.35));
+const arcGap = 0.5;
+const smallerItemsThreshold = 0.005;
+const arc = d3
   .arc<D3HierarchyDiskItemArc>()
   .startAngle((d) => d.x0)
   .endAngle((d) => d.x1)
-  .padAngle((d) => Math.min((d.x1 - d.x0) / 2, 0.005))
+  .padAngle((d) => Math.min((d.x1 - d.x0) / 2, 0.0025))
   .padRadius(radius * 1.5)
   .innerRadius((d) => d.y0 * radius)
-  .outerRadius((d) => Math.max(d.y0 * radius, d.y1 * radius - 3));
+  .outerRadius((d) => Math.max(d.y0 * radius, d.y1 * radius - arcGap));
 
 // export const blink = (root) => {
 //   root
@@ -24,10 +28,10 @@ var arc = d3
 //     .on('end', blink);
 // };
 const arcVisible = (d: D3HierarchyDiskItemArc) => {
-  // d.y1 <= 4 => Hide arcs with outer radius larger than 4
+  // Hide arcs outside the focused subtree's visible ring budget.
   // d.y0 >= 1 => Hide root arc (spot in the middle)
   // d.x1 > d.x0 => hide non focused arcs
-  return d.y1 <= 4 && d.y0 >= 1 && d.x1 > d.x0;
+  return d.y1 <= maxVisibleRadiusUnits && d.y0 >= 1 && d.x1 > d.x0;
 };
 
 const formatNodePath = (node: D3HierarchyDiskItem) => {
@@ -70,20 +74,7 @@ const baseArcOpacity = (
     return 0;
   }
 
-  return node.children ? 0.88 : 0.74;
-};
-
-const hoverArcOpacity = (
-  node: D3HierarchyDiskItem,
-  hoveredNodeId: string | null
-) => {
-  const baseOpacity = baseArcOpacity(node);
-
-  if (!hoveredNodeId || baseOpacity === 0) {
-    return baseOpacity;
-  }
-
-  return node.data.id === hoveredNodeId ? 1 : Math.max(baseOpacity - 0.18, 0.42);
+  return node.children ? 0.98 : 0.9;
 };
 
 const applyHoverState = (
@@ -107,15 +98,9 @@ const applyHoverState = (
     : path;
 
   selection
-    .attr("fill-opacity", (d: D3HierarchyDiskItem) =>
-      hoverArcOpacity(d, visibleHoveredNodeId)
-    )
-    .attr("stroke", (d: D3HierarchyDiskItem) =>
-      d.data.id === visibleHoveredNodeId ? "#f8fafc" : "#2f3746"
-    )
-    .attr("stroke-width", (d: D3HierarchyDiskItem) =>
-      d.data.id === visibleHoveredNodeId ? 2.25 : 0.75
-    );
+    .attr("fill-opacity", (d: D3HierarchyDiskItem) => baseArcOpacity(d))
+    .attr("stroke", "#2f3746")
+    .attr("stroke-width", 0.55);
 
   const startPulse = () => {
     if (!visibleHoveredNodeId) return;
@@ -124,15 +109,13 @@ const applyHoverState = (
     const pulse = () => {
       hoveredPath
         .transition("pulse")
-        .duration(650)
+        .duration(320)
         .ease(d3.easeSinInOut)
-        .attr("fill-opacity", 0.92)
-        .attr("stroke-width", 3)
+        .attr("fill-opacity", 0.82)
         .transition()
-        .duration(650)
+        .duration(320)
         .ease(d3.easeSinInOut)
-        .attr("fill-opacity", 1)
-        .attr("stroke-width", 2.25)
+        .attr("fill-opacity", (d: D3HierarchyDiskItem) => baseArcOpacity(d))
         .on("end", pulse);
     };
 
@@ -241,20 +224,49 @@ const animateToTarget = (
       // console.error(e);
     });
 };
+
+const makeSmallerItemsNode = (
+  item: D3HierarchyDiskItem,
+  focused: D3HierarchyDiskItem,
+  index: number
+) => {
+  const data: DiskItem = {
+    id: `${item.parent?.data.id || focused.data.id}/__smaller_items_${index}`,
+    isDirectory: false,
+    name: "Smaller Items",
+    value: item.value || 0,
+    size: item.value || 0,
+    children: [],
+    synthetic: true,
+  };
+  const node = d3.hierarchy(data) as D3HierarchyDiskItem;
+
+  Object.assign(node as any, item);
+  node.data = data;
+  node.parent = item.parent;
+  (node as any).children = undefined;
+  (node as any).value = item.value || 0;
+  node.current = { ...item.current };
+
+  return node;
+};
+
 const updateData = (
   root: D3HierarchyDiskItem,
   focused: D3HierarchyDiskItem,
   innerG: d3.Selection<SVGGElement, D3HierarchyDiskItem, null, undefined>,
   // color: d3.ScaleOrdinal<string, string, never>,
   arcClickHandler: (event: any, focusedNode: D3HierarchyDiskItem) => void,
-  hoverHandler: (event: any, focusedNode: D3HierarchyDiskItem) => void
+  hoverHandler: (event: any, focusedNode: D3HierarchyDiskItem) => void,
+  clearHoverHandler: () => void,
+  contextMenuHandler: (event: any, focusedNode: D3HierarchyDiskItem) => void
 ) => {
   let filtered = [...focused.ancestors().slice(-1)];
   let initialDepth = focused.depth;
-  let maxDepth = initialDepth + 3;
+  let maxDepth = initialDepth + visibleDescendantLevels;
   let overallSize = focused.value || 0;
   let accumulator: D3HierarchyDiskItem | null = null;
-  let accumulatorLastParent = null;
+  let accumulatorLastParent: D3HierarchyDiskItem | null = null;
   let smallerItemIndex = 0;
   let skipMap: any = {};
 
@@ -275,39 +287,31 @@ const updateData = (
     }
     // Escludo cerchi più esterni
     if (item.depth > maxDepth) {
-      break;
+      continue;
     }
-    if ((item.value || 0) / overallSize > 0.005) {
+    const sizeRatio = overallSize > 0 ? (item.value || 0) / overallSize : 1;
+    if (sizeRatio > smallerItemsThreshold) {
       // Includo item grandi
       filtered.push(item);
     } else {
       // Accumulo item piccoli
       if (accumulator) {
         skipMap[item.data.id] = true;
-        accumulator.data.value! += item.value ?? 0;
+        accumulator.data.value += item.value ?? 0;
+        accumulator.data.size += item.value ?? 0;
         (accumulator as any).value += item.value ?? 0;
 
         (accumulator as any).current.x1 = item.current.x1;
         (accumulator as any).x1 = item.x1;
       } else {
         skipMap[item.data.id] = true;
-        let v: DiskItem = {
-          id: `${item.parent?.data.id || focused.data.id}/__smaller_items_${
-            smallerItemIndex++
-          }`,
-          isDirectory: false,
-          name: "Smaller Items",
-          value: item.value || 0,
-          size: item.value || 0,
-          children: [],
-        };
-        accumulator = d3.hierarchy(v) as D3HierarchyDiskItem;
+        accumulator = makeSmallerItemsNode(item, focused, smallerItemIndex++);
         accumulatorLastParent = item.parent;
-        accumulator.parent = item.parent;
-
-        Object.assign((accumulator as any), item);
       }
     }
+  }
+  if (accumulator) {
+    filtered.push(accumulator);
   }
   setTargetAngles(filtered, focused);
   // console.log({filtered})
@@ -331,12 +335,13 @@ const updateData = (
           .attr("fill", getChartColor)
           .attr("fill-opacity", (d) => baseArcOpacity(d))
           .attr("stroke", "#2f3746")
-          .attr("stroke-width", 0.75)
+          .attr("stroke-width", 0.55)
           .attr("stroke-linejoin", "round")
           .attr("d", (d) => arc(d.current))
-          .style("cursor", "pointer")
           .on("click", arcClickHandler)
-          .on("mouseover", (e, p) => hoverHandler(e, p));
+          .on("mouseover", (e, p) => hoverHandler(e, p))
+          .on("mouseleave", () => clearHoverHandler())
+          .on("contextmenu", (e, p) => contextMenuHandler(e, p));
         // Add Title
         xx.append("title").text((d) => titleText(d, mul));
         return xx;
@@ -350,7 +355,7 @@ const updateData = (
           .attr("fill", getChartColor)
           .attr("fill-opacity", (d) => baseArcOpacity(d))
           .attr("stroke", "#2f3746")
-          .attr("stroke-width", 0.75)
+          .attr("stroke-width", 0.55)
           .attr("d", (d) => arc(d.current));
       }
     );
@@ -361,12 +366,20 @@ const updateData = (
 interface GetChartCallbacks {
   arcClicked: (e: any, node: D3HierarchyDiskItem) => D3HierarchyDiskItem;
   arcHover: (e: any, node: D3HierarchyDiskItem) => void;
+  arcContextMenu: (e: any, node: D3HierarchyDiskItem) => void;
+  hoverCleared: () => void;
   centerHover: (e: any, node: D3HierarchyDiskItem) => void;
 }
 export const getChart = (
   root: D3HierarchyDiskItem,
   svgElem: SVGSVGElement,
-  { arcClicked, arcHover, centerHover }: GetChartCallbacks
+  {
+    arcClicked,
+    arcHover,
+    arcContextMenu,
+    hoverCleared,
+    centerHover,
+  }: GetChartCallbacks
 ) => {
   // Map a value to unique color
   let current = root;
@@ -386,6 +399,14 @@ export const getChart = (
     .append("g")
     .attr("transform", `translate(${width / 2},${width / 2})`);
 
+  g.append("circle")
+    .datum(root)
+    .attr("data-testid", "chart-hover-reset")
+    .attr("r", radius * maxVisibleRadiusUnits)
+    .attr("fill", "transparent")
+    .attr("pointer-events", "all")
+    .on("mouseover", () => clearHoverHandler());
+
   let innerG = g.append("g");
 
   // Back to parent click
@@ -398,7 +419,15 @@ export const getChart = (
     .on("click", (e, p) => centerClickHandler(e, p))
     .on("mouseover", (e, p) => centerHoverHandler(e, p));
 
-  let path = updateData(root, root, innerG, arcClickHandler, arcHoverHandler);
+  let path = updateData(
+    root,
+    root,
+    innerG,
+    arcClickHandler,
+    arcHoverHandler,
+    clearHoverHandler,
+    arcContextMenuHandler
+  );
 
   const setHoveredNode = (node: D3HierarchyDiskItem | null) => {
     hoveredNodeId = node?.data.id ?? null;
@@ -413,6 +442,14 @@ export const getChart = (
     setHoveredNode(node);
     arcHover(e, node);
   }
+  function arcContextMenuHandler(e: any, node: D3HierarchyDiskItem) {
+    setHoveredNode(node);
+    arcContextMenu(e, node);
+  }
+  function clearHoverHandler() {
+    setHoveredNode(null);
+    hoverCleared();
+  }
   function centerClickHandler(e: any, focusedNode: D3HierarchyDiskItem) {
     // getNodeData(e, focusedNode);
     if (current === root) {
@@ -426,7 +463,9 @@ export const getChart = (
       focusedNode,
       innerG,
       arcClickHandler,
-      arcHoverHandler
+      arcHoverHandler,
+      clearHoverHandler,
+      arcContextMenuHandler
     );
     backElement.datum(focusedNode.parent || root);
     // setTargetAngles(root, focusedNode);
@@ -445,7 +484,9 @@ export const getChart = (
       focusedNode,
       innerG,
       arcClickHandler,
-      arcHoverHandler
+      arcHoverHandler,
+      clearHoverHandler,
+      arcContextMenuHandler
     );
     backElement.datum(focusedNode.parent || root);
     // setTargetAngles(focusedNode.parent || root, focusedNode);
@@ -493,7 +534,9 @@ export const getChart = (
         current,
         innerG,
         arcClickHandler,
-        arcHoverHandler
+        arcHoverHandler,
+        clearHoverHandler,
+        arcContextMenuHandler
       );
       animateToTarget(g, path, () => hoveredNodeId);
     },

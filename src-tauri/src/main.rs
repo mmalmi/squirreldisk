@@ -24,8 +24,8 @@ use window_vibrancy::NSVisualEffectMaterial;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SquirrelDisk<'a> {
-    name: &'a str,
+struct SquirrelDisk {
+    name: String,
     s_mount_point: String,
     total_space: u64,
     available_space: u64,
@@ -39,7 +39,7 @@ struct DeleteOutcome {
 }
 
 fn main() {
-    tauri::Builder::default()
+    if let Err(error) = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_shell::init())
@@ -52,20 +52,31 @@ fn main() {
         .manage(MyState(Default::default()))
         .setup(|app| {
             #[cfg(any(target_os = "windows", target_os = "macos"))]
-            let window = app.get_webview_window("main").unwrap();
+            let window = app.get_webview_window("main");
             #[cfg(not(any(target_os = "windows", target_os = "macos")))]
             let _ = app;
             // window.open_devtools();
-            #[cfg(target_os = "macos")]
-            window_vibrancy::apply_vibrancy(&window, NSVisualEffectMaterial::HudWindow, None, None)
-                .expect("Error applying blurred bg");
-
-            #[cfg(target_os = "windows")]
-            window_vibrancy::apply_blur(&window, Some((18, 18, 18, 125)))
-                .expect("Error applying blurred bg");
-
             #[cfg(any(target_os = "windows", target_os = "macos"))]
-            window_style::set_window_styles(&window).unwrap();
+            if let Some(window) = window {
+                #[cfg(target_os = "macos")]
+                if let Err(error) = window_vibrancy::apply_vibrancy(
+                    &window,
+                    NSVisualEffectMaterial::HudWindow,
+                    None,
+                    None,
+                ) {
+                    eprintln!("Error applying blurred bg: {error}");
+                }
+
+                #[cfg(target_os = "windows")]
+                if let Err(error) = window_vibrancy::apply_blur(&window, Some((18, 18, 18, 125))) {
+                    eprintln!("Error applying blurred bg: {error}");
+                }
+
+                if let Err(error) = window_style::set_window_styles(&window) {
+                    eprintln!("Error applying window styles: {error}");
+                }
+            }
 
             // app.listen_global("scan_stop", |event| {
             //     let s = app.state::<MyState>();
@@ -78,6 +89,7 @@ fn main() {
             start_scanning,
             stop_scanning,
             show_in_folder,
+            open_terminal,
             delete_permanently,
             open_full_disk_access_settings,
             privacy::get_privacy_access_status,
@@ -88,7 +100,9 @@ fn main() {
             snapshots::delete_scan_snapshot
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    {
+        eprintln!("error while running tauri application: {error}");
+    }
 }
 
 #[tauri::command]
@@ -197,32 +211,41 @@ fn measured_delete_bytes(path: &Path) -> std::io::Result<u64> {
 }
 
 #[tauri::command]
-fn show_in_folder(path: String) {
+fn show_in_folder(path: String) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("Path is empty".to_string());
+    }
+
     #[cfg(target_os = "windows")]
     {
-        use regex::Regex;
-
-        let re = Regex::new(r"/").unwrap();
-        let result = re.replace_all(&path, "\\");
+        let result = path.replace('/', "\\");
         Command::new("explorer")
             .args(["/select,", format!("{}", result).as_str()]) // The comma after select is not a typo
             .spawn()
-            .unwrap();
+            .map_err(|error| error.to_string())?;
+        return Ok(());
     }
 
     #[cfg(target_os = "linux")]
     {
         // if path.contains(",") {
         // see https://gitlab.freedesktop.org/dbus/dbus/-/issues/76
-        let new_path = match fs::metadata(&path).unwrap().is_dir() {
-            true => path,
-            false => {
-                let mut path2 = PathBuf::from(path);
-                path2.pop();
-                path2.into_os_string().into_string().unwrap()
-            }
+        let new_path = if fs::metadata(&path)
+            .map_err(|error| error.to_string())?
+            .is_dir()
+        {
+            PathBuf::from(&path)
+        } else {
+            PathBuf::from(&path)
+                .parent()
+                .map(Path::to_path_buf)
+                .ok_or_else(|| "Path has no parent directory".to_string())?
         };
-        Command::new("xdg-open").arg(&new_path).spawn().unwrap();
+        Command::new("xdg-open")
+            .arg(&new_path)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
         // } else {
         //     Command::new("dbus-send")
         //         .args([
@@ -241,12 +264,106 @@ fn show_in_folder(path: String) {
 
     #[cfg(target_os = "macos")]
     {
-        Command::new("open").args(["-R", &path]).spawn().unwrap();
+        Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
     }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        Err("Showing files in a folder is not supported on this platform".to_string())
+    }
+}
+
+#[tauri::command]
+fn open_terminal(path: String) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("Path is empty".to_string());
+    }
+
+    let dir = terminal_directory(&PathBuf::from(path));
+
+    #[cfg(target_os = "macos")]
+    {
+        let dir_text = dir.to_string_lossy().to_string();
+        Command::new("open")
+            .args(["-a", "Terminal", dir_text.as_str()])
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let dir_text = dir.to_string_lossy().to_string();
+        let command = format!(
+            "Set-Location -LiteralPath {}",
+            powershell_literal(&dir_text)
+        );
+        Command::new("cmd")
+            .arg("/C")
+            .arg("start")
+            .arg("")
+            .arg("powershell.exe")
+            .arg("-NoExit")
+            .arg("-Command")
+            .arg(command)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return open_linux_terminal(&dir);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        Err("Opening a terminal is not supported on this platform".to_string())
+    }
+}
+
+fn terminal_directory(path: &Path) -> PathBuf {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => path.to_path_buf(),
+        _ => path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(".")),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn powershell_literal(path: &str) -> String {
+    format!("'{}'", path.replace('\'', "''"))
+}
+
+#[cfg(target_os = "linux")]
+fn open_linux_terminal(dir: &Path) -> Result<(), String> {
+    let terminals = [
+        "x-terminal-emulator",
+        "gnome-terminal",
+        "konsole",
+        "xfce4-terminal",
+        "alacritty",
+    ];
+    let mut errors = Vec::new();
+
+    for terminal in terminals {
+        match Command::new(terminal).current_dir(dir).spawn() {
+            Ok(_) => return Ok(()),
+            Err(error) => errors.push(format!("{terminal}: {error}")),
+        }
+    }
+
+    Err(format!("Could not open terminal: {}", errors.join("; ")))
 }
 // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
 #[tauri::command]
-fn get_disks() -> String {
+fn get_disks() -> Result<String, String> {
     let mut sys = System::new_all();
     sys.refresh_all();
 
@@ -254,14 +371,14 @@ fn get_disks() -> String {
 
     for disk in sys.disks() {
         vec.push(SquirrelDisk {
-            name: disk.name().to_str().unwrap(),
+            name: disk.name().to_string_lossy().to_string(),
             s_mount_point: disk.mount_point().display().to_string(),
             total_space: disk.total_space(),
             available_space: disk.available_space(),
             is_removable: disk.is_removable(),
         });
     }
-    serde_json::to_string(&vec).unwrap().into()
+    serde_json::to_string(&vec).map_err(|error| error.to_string())
 }
 
 pub struct MyState(Mutex<Option<CommandChild>>);
@@ -272,7 +389,7 @@ fn start_scanning(
     state: tauri::State<'_, MyState>,
     path: String,
     ratio: String,
-) -> Result<(), ()> {
+) -> Result<(), String> {
     scan::start(app_handle, state, path, ratio)
 }
 

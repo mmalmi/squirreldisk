@@ -1,5 +1,4 @@
 declare module "mongoid-js";
-declare module "shade-blend-color";
 
 interface DiskItem {
   id: string;
@@ -11,6 +10,7 @@ interface DiskItem {
   restricted?: boolean;
   restrictedPath?: string;
   restrictedReason?: string;
+  synthetic?: boolean;
 }
 
 interface RestrictedPath {

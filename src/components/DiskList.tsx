@@ -53,25 +53,29 @@ const DiskList = () => {
   useEffect(() => {
     // window.electron.diskUtils.killDiskSizeWorker();
     const syncDisks = async () => {
-      const disksString: string = await invoke("get_disks");
-      const disks = JSON.parse(disksString);
-      const plat = platform();
-      let filtered = disks.filter((disk: any) => {
-        if (plat === "macos" && disk.sMountPoint === "/System/Volumes/Data") {
-          return false; // Since it will be used /System/Volumes/Data
-        }
-        if (
-          plat === "linux" &&
-          disk.sMountPoint === "/var/snap/firefox/common/host-hunspell"
-        ) {
-          return false;
-        }
-        if (plat === "linux" && disk.sMountPoint === "/boot/efi") {
-          return false;
-        }
-        return true;
-      });
-      setDisks(filtered);
+      try {
+        const disksString: string = await invoke("get_disks");
+        const disks = JSON.parse(disksString);
+        const plat = platform();
+        let filtered = disks.filter((disk: any) => {
+          if (plat === "macos" && disk.sMountPoint === "/System/Volumes/Data") {
+            return false; // Since it will be used /System/Volumes/Data
+          }
+          if (
+            plat === "linux" &&
+            disk.sMountPoint === "/var/snap/firefox/common/host-hunspell"
+          ) {
+            return false;
+          }
+          if (plat === "linux" && disk.sMountPoint === "/boot/efi") {
+            return false;
+          }
+          return true;
+        });
+        setDisks(filtered);
+      } catch (error) {
+        console.error("Failed to sync disks:", error);
+      }
     };
     const handle = setInterval(syncDisks, 2000);
     syncDisks();

@@ -116,6 +116,13 @@ struct RestrictedPathPayload {
     message: String,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanFailurePayload {
+    path: String,
+    message: String,
+}
+
 fn progress_regex() -> Regex {
     Regex::new(r"\(scanned ([0-9]+), total ([0-9]+)(?:, linked [0-9]+, shared [0-9]+)?(?:, erred ([0-9]+))?\)").unwrap()
 }
@@ -131,19 +138,19 @@ fn payload_from_progress_captures(groups: Captures) -> Payload {
             .map_or("0", |m| m.as_str())
             .trim_end()
             .parse::<u64>()
-            .unwrap(),
+            .unwrap_or(0),
         total: groups
             .get(2)
             .map_or("0", |m| m.as_str())
             .trim_end()
             .parse::<u64>()
-            .unwrap(),
+            .unwrap_or(0),
         errors: groups
             .get(3)
             .map_or("0", |m| m.as_str())
             .trim_end()
             .parse::<u64>()
-            .unwrap(),
+            .unwrap_or(0),
     }
 }
 
@@ -181,12 +188,13 @@ pub fn start(
     state: tauri::State<'_, MyState>,
     path: String,
     ratio: String,
-) -> Result<(), ()> {
+) -> Result<(), String> {
     println!("Start Scanning {}", path);
+    let scan_root = path.clone();
     let mut paths_to_scan = initial_scan_args(&ratio);
 
     if path.eq("/") {
-        let paths = fs::read_dir("/").map_err(|_| ())?;
+        let paths = fs::read_dir("/").map_err(|error| error.to_string())?;
 
         for scan_path in paths {
             let scan_path_str = match scan_path {
@@ -234,16 +242,28 @@ pub fn start(
         )
         .ok();
 
-    let pdu_command = app_handle
-        .shell()
-        .sidecar("pdu")
-        .expect("failed to create `pdu` sidecar command");
-    let (mut rx, child) = pdu_command
-        .args(paths_to_scan)
-        .spawn()
-        .expect("Failed to spawn sidecar");
+    let pdu_command = app_handle.shell().sidecar("pdu").map_err(|error| {
+        let message = format!("failed to create `pdu` sidecar command: {error}");
+        emit_scan_failure(&app_handle, &scan_root, &message);
+        message
+    })?;
+    let (mut rx, child) = pdu_command.args(paths_to_scan).spawn().map_err(|error| {
+        let message = format!("Failed to spawn sidecar: {error}");
+        emit_scan_failure(&app_handle, &scan_root, &message);
+        message
+    })?;
 
-    *state.0.lock().unwrap() = Some(child);
+    match state.0.lock() {
+        Ok(mut guard) => {
+            *guard = Some(child);
+        }
+        Err(error) => {
+            let message = format!("Failed to lock scan state: {error}");
+            let _ = child.kill();
+            emit_scan_failure(&app_handle, &scan_root, &message);
+            return Err(message);
+        }
+    }
 
     // unlisten to the event using the `id` returned on the `listen_global` function
     // an `once_global` API is also exposed on the `App` struct
@@ -256,13 +276,13 @@ pub fn start(
             match event {
                 CommandEvent::Stdout(line) => {
                     //println!("Stdout:{}", &line);
-                    let string = String::from_utf8(line).unwrap();
+                    let string = String::from_utf8_lossy(&line).to_string();
                     app_handle.emit("scan_completed", string).ok();
                 }
                 CommandEvent::Stderr(msg) => {
                     // println!("Stderr:{}", &msg);
 
-                    let string = String::from_utf8(msg).unwrap();
+                    let string = String::from_utf8_lossy(&msg).to_string();
                     for groups in progress_re.captures_iter(&string) {
                         if groups.len() > 2 {
                             emit_scan_status(&app_handle, groups)
@@ -389,15 +409,35 @@ pub fn start(
 }
 
 pub fn stop(state: tauri::State<'_, MyState>) {
-    if let Some(child) = state.0.lock().unwrap().take() {
-        let _ = child.kill();
+    if let Ok(mut guard) = state.0.lock() {
+        if let Some(child) = guard.take() {
+            let _ = child.kill();
+        }
     }
 }
 
 fn emit_scan_status(app_handle: &tauri::AppHandle, groups: Captures) {
     app_handle
         .emit("scan_status", payload_from_progress_captures(groups))
-        .unwrap();
+        .ok();
+}
+
+fn emit_scan_failure(app_handle: &tauri::AppHandle, path: &str, message: &str) {
+    let payload = ScanFailurePayload {
+        path: path.to_string(),
+        message: message.to_string(),
+    };
+    app_handle.emit("scan_failed", payload).ok();
+    app_handle
+        .emit(
+            "scan_restricted_path",
+            RestrictedPathPayload {
+                path: path.to_string(),
+                operation: "scan".to_string(),
+                message: message.to_string(),
+            },
+        )
+        .ok();
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ import { getIconForFile, getIconForFolder } from "vscode-icons-js";
 // import { iconImages } from "./iconImages";
 import { Draggable } from "react-beautiful-dnd";
 import { invoke } from "@tauri-apps/api/core";
+import type { MouseEvent as ReactMouseEvent } from "react";
 
 interface FileLineProps {
   item: D3HierarchyDiskItem;
@@ -14,6 +15,11 @@ interface FileLineProps {
   onHover: (item: D3HierarchyDiskItem) => void;
   onHoverEnd: () => void;
   onOpenDirectory: (item: D3HierarchyDiskItem) => void;
+  onContextMenu: (
+    event: ReactMouseEvent<HTMLDivElement>,
+    item: D3HierarchyDiskItem
+  ) => void;
+  isCollectDisabled?: boolean;
 }
 
 const mul = window.OS_TYPE === "windows" ? 1024 : 1000;
@@ -26,14 +32,17 @@ export const FileLine = ({
   onHover,
   onHoverEnd,
   onOpenDirectory,
+  onContextMenu,
+  isCollectDisabled,
 }: FileLineProps) => {
   const isRestricted = !!item.data.restricted;
   const isDirectory = !!item.data.isDirectory || !!item.children;
+  const isSynthetic = !!item.data.synthetic;
   return (
     <Draggable
       draggableId={item.data.id}
       index={index}
-      isDragDisabled={isRestricted}
+      isDragDisabled={isRestricted || isSynthetic || isCollectDisabled}
     >
       {(provided) => (
         <div
@@ -47,10 +56,7 @@ export const FileLine = ({
               ? "border border-red-800 hover:border-red-900"
               : " ")
           }
-          onContextMenu={(e) => {
-            e.preventDefault();
-            invoke("show_in_folder", { path: buildFullPath(item) });
-          }}
+          onContextMenu={(e) => onContextMenu(e, item)}
           onClick={() => {
             isRestricted
               ? invoke("show_in_folder", { path: buildFullPath(item) })

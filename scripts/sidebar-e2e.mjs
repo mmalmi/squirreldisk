@@ -194,6 +194,7 @@ const writeHarness = ({ scanRoot, scanPayload }) => {
           }
           if (cmd === "stop_scanning") return null;
           if (cmd === "show_in_folder") return null;
+          if (cmd === "open_terminal") return null;
           return null;
         },
       };
@@ -354,6 +355,21 @@ const mouseOver = async (cdp, selector) =>
     })()`,
   )
 
+const mouseLeave = async (cdp, selector) =>
+  evalInPage(
+    cdp,
+    `(() => {
+      const el = document.querySelector(${selectorFor(selector)});
+      if (!el) return false;
+      el.dispatchEvent(new MouseEvent('mouseleave', {
+        bubbles: false,
+        cancelable: true,
+        view: window,
+      }));
+      return true;
+    })()`,
+  )
+
 const click = async (cdp, selector) => {
   const point = await pointForSelector(cdp, selector)
   await cdp.send('Input.dispatchMouseEvent', {
@@ -378,6 +394,30 @@ const click = async (cdp, selector) => {
   })
 }
 
+const rightClick = async (cdp, selector) => {
+  const point = await pointForSelector(cdp, selector)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: point.x,
+    y: point.y,
+    button: 'none',
+  })
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: point.x,
+    y: point.y,
+    button: 'right',
+    clickCount: 1,
+  })
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: point.x,
+    y: point.y,
+    button: 'right',
+    clickCount: 1,
+  })
+}
+
 const sidebarState = (cdp) =>
   evalInPage(
     cdp,
@@ -393,6 +433,25 @@ const sidebarState = (cdp) =>
             id: entry.getAttribute('data-entry-id'),
             text: entry.textContent.replace(/\\s+/g, ' ').trim(),
           })),
+      };
+    })()`,
+  )
+
+const breadcrumbState = (cdp) =>
+  evalInPage(
+    cdp,
+    `(() => {
+      const breadcrumb = document.querySelector('[data-testid="title-breadcrumb"]');
+      const root = document.querySelector('[data-testid="title-breadcrumb-root"]');
+      const current = document.querySelector('[data-testid="title-breadcrumb-current"]');
+      return {
+        text: breadcrumb?.textContent.replace(/\\s+/g, ' ').trim() || '',
+        rootPath: root?.getAttribute('data-path') || null,
+        rootTitle: root?.getAttribute('title') || null,
+        rootOverflowed: root ? root.scrollWidth > root.clientWidth : false,
+        currentPath: current?.getAttribute('data-path') || null,
+        segmentPaths: [...document.querySelectorAll('[data-testid="title-breadcrumb-segment"]')]
+          .map((segment) => segment.getAttribute('data-path')),
       };
     })()`,
   )
@@ -456,17 +515,81 @@ const main = async () => {
     let state = await sidebarState(cdp)
     assert(state.preview === 'false', 'root sidebar should not be preview')
     assertEntryIds(state, [usersId, libraryId, applicationsId], 'root entries')
+    let breadcrumb = await breadcrumbState(cdp)
+    assert(!breadcrumb.text.includes('SquirrelDisk'), 'breadcrumb should not show app name')
+    assert(breadcrumb.text.includes('All Disks'), 'breadcrumb should start at All Disks')
+    assert(breadcrumb.text.includes('Disk'), 'breadcrumb should include disk crumb')
+    assert(breadcrumb.rootPath === rootId, 'disk crumb should point at scan root')
+    assert(breadcrumb.rootTitle === rootId, 'disk crumb should expose full root path')
+    assert(breadcrumb.rootOverflowed, 'long disk crumb should be visually truncated')
+
+    await rightClick(cdp, `[data-testid="sidebar-entry"][data-entry-id="${usersId}"]`)
+    await waitFor(
+      cdp,
+      `document.querySelector('[data-testid="node-context-menu"]')?.getAttribute('data-node-id') === ${JSON.stringify(usersId)}`,
+    )
+    await waitFor(
+      cdp,
+      `document.querySelector('[data-testid="context-menu-collect"]')?.disabled === false`,
+    )
+    await click(cdp, '[data-testid="context-menu-collect"]')
+    await waitFor(
+      cdp,
+      `document.querySelector('[data-testid="node-context-menu"]') === null
+        && document.querySelector('[data-testid="collector-drop-zone"]')?.textContent.includes('1 selected')`,
+    )
+
+    await rightClick(cdp, `[data-testid="sidebar-entry"][data-entry-id="${usersId}"]`)
+    await waitFor(
+      cdp,
+      `document.querySelector('[data-testid="context-menu-collect"]')?.disabled === true
+        && document.querySelector('[data-testid="context-menu-collect"]')?.textContent.includes('Already in Collector')`,
+    )
+    await cdp.send('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      windowsVirtualKeyCode: 27,
+      key: 'Escape',
+      code: 'Escape',
+    })
+    await cdp.send('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      windowsVirtualKeyCode: 27,
+      key: 'Escape',
+      code: 'Escape',
+    })
 
     await mouseOver(cdp, `[data-testid="chart-arc"][data-node-id="${usersId}"]`)
     await waitFor(
       cdp,
       `document.querySelector('[data-testid="sidebar-file-list"]')?.getAttribute('data-directory-id') === ${JSON.stringify(usersId)}`,
     )
+    const rootHoverStyle = await evalInPage(
+      cdp,
+      `(() => {
+        const hoveredArc = document.querySelector('[data-testid="chart-arc"][data-node-id="${usersId}"]');
+        const siblingArc = document.querySelector('[data-testid="chart-arc"][data-node-id="${libraryId}"]');
+        return {
+          hoveredStrokeWidth: Number(hoveredArc?.getAttribute('stroke-width') || 0),
+          siblingOpacity: Number(siblingArc?.getAttribute('fill-opacity') || 0),
+        };
+      })()`,
+    )
+    assert(rootHoverStyle.hoveredStrokeWidth <= 0.6, 'hovered arc should keep a thin stroke')
+    assert(rootHoverStyle.siblingOpacity >= 0.95, 'hover should not dim sibling arcs')
     state = await sidebarState(cdp)
     assert(state.preview === 'true', 'hovered Users should render as preview')
     assertEntryIds(state, [siriusId, sharedId], 'Users preview entries')
 
-    await click(cdp, '[data-testid="sidebar-directory"]')
+    await mouseLeave(cdp, `[data-testid="chart-arc"][data-node-id="${usersId}"]`)
+    await waitFor(
+      cdp,
+      `document.querySelector('[data-testid="sidebar-file-list"]')?.getAttribute('data-preview') === 'false'
+        && document.querySelector('[data-testid="sidebar-file-list"]')?.getAttribute('data-directory-id') === ${JSON.stringify(rootId)}`,
+    )
+    state = await sidebarState(cdp)
+    assertEntryIds(state, [usersId, libraryId, applicationsId], 'root entries after hover reset')
+
+    await click(cdp, `[data-testid="sidebar-entry"][data-entry-id="${usersId}"]`)
     await waitFor(
       cdp,
       `document.querySelector('[data-testid="sidebar-file-list"]')?.getAttribute('data-preview') === 'false'
@@ -474,6 +597,30 @@ const main = async () => {
     )
     state = await sidebarState(cdp)
     assertEntryIds(state, [siriusId, sharedId], 'Users active entries')
+    breadcrumb = await breadcrumbState(cdp)
+    assert(breadcrumb.currentPath === usersId, 'breadcrumb should track focused Users directory')
+    assert(breadcrumb.text.includes('Users'), 'breadcrumb should show focused Users segment')
+    assert(!breadcrumb.text.includes('SquirrelDisk'), 'focused breadcrumb should not show app name')
+
+    await click(cdp, `[data-testid="sidebar-entry"][data-entry-id="${siriusId}"]`)
+    await waitFor(
+      cdp,
+      `document.querySelector('[data-testid="sidebar-file-list"]')?.getAttribute('data-directory-id') === ${JSON.stringify(siriusId)}`,
+    )
+    breadcrumb = await breadcrumbState(cdp)
+    assert(breadcrumb.currentPath === siriusId, 'breadcrumb should track nested focused directory')
+    assert(
+      breadcrumb.segmentPaths.includes(usersId),
+      'breadcrumb should make ancestor path segments clickable',
+    )
+
+    await click(cdp, `[data-testid="title-breadcrumb-segment"][data-path="${usersId}"]`)
+    await waitFor(
+      cdp,
+      `document.querySelector('[data-testid="sidebar-file-list"]')?.getAttribute('data-directory-id') === ${JSON.stringify(usersId)}`,
+    )
+    state = await sidebarState(cdp)
+    assertEntryIds(state, [siriusId, sharedId], 'Users entries after breadcrumb click')
 
     await click(cdp, '[data-testid="sidebar-directory"]')
     await waitFor(
@@ -513,7 +660,7 @@ const main = async () => {
     }
     await waitFor(
       cdp,
-      `Number(document.querySelector('[data-testid="chart-arc"][data-node-id="${cachesId}"]')?.getAttribute('stroke-width') || 0) >= 2`,
+      `Number(document.querySelector('[data-testid="chart-arc"][data-node-id="${cachesId}"]')?.getAttribute('stroke-width') || 0) <= 0.6`,
     )
 
     console.log('sidebar-pdu-e2e=ok')

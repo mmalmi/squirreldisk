@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useLocation } from "react-router-dom";
 import diskIcon from "../assets/harddisk.png";
 import { getChart } from "../d3chart";
@@ -27,6 +28,11 @@ interface ScanStatus {
   items: number;
   total: number;
   errors: number;
+}
+
+interface ScanFailure {
+  path: string;
+  message: string;
 }
 
 interface PrivacyAccessStatus {
@@ -67,13 +73,57 @@ interface DeleteOutcome {
   deletedBytes: number;
 }
 
+interface ContextMenuState {
+  x: number;
+  y: number;
+  node: D3HierarchyDiskItem;
+}
+
+interface NodeContextMenuEvent {
+  clientX: number;
+  clientY: number;
+  preventDefault: () => void;
+  stopPropagation: () => void;
+}
+
 const DELETE_COUNTDOWN_SECONDS = 5;
+const CONTEXT_MENU_WIDTH = 250;
+const CONTEXT_MENU_HEIGHT = 170;
+
+const normalizePathText = (path: string) => {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized || "/";
+};
 
 const normalizeNodePath = (node: D3HierarchyDiskItem) =>
-  buildFullPath(node).replace(/\\/g, "/");
+  normalizePathText(buildFullPath(node));
+
+const findNodeByFullPath = (
+  root: D3HierarchyDiskItem,
+  path: string
+): D3HierarchyDiskItem | null => {
+  const normalizedPath = normalizePathText(path);
+  return (
+    root
+      .descendants()
+      .find((node) => normalizeNodePath(node) === normalizedPath) || null
+  );
+};
 
 const isDirectoryNode = (node: D3HierarchyDiskItem | null) =>
   !!node && (!!node.data.isDirectory || !!node.children);
+
+const isSyntheticNode = (node: D3HierarchyDiskItem | null) =>
+  !!node?.data.synthetic || !!node?.data.id.includes("__smaller_items_");
+
+const isAncestorNode = (
+  ancestor: D3HierarchyDiskItem,
+  node: D3HierarchyDiskItem
+) =>
+  node
+    .ancestors()
+    .slice(1)
+    .some((candidate) => candidate.data.id === ancestor.data.id);
 
 const wait = (ms: number) =>
   new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -101,9 +151,9 @@ const formatProgressPercent = (percent: number) =>
   `${percent < 10 ? percent.toFixed(1) : percent.toFixed(0)}%`;
 
 const Scanning = () => {
-  let {
-    state: { disk, used, forceScan },
-  } = useLocation() as any;
+  const location = useLocation() as any;
+  const routeState = location.state || {};
+  const { disk, used, forceScan, focusedPath: requestedFocusedPath } = routeState;
   const navigate = useNavigate();
 
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -124,6 +174,7 @@ const Scanning = () => {
   const d3Chart = useRef(null) as any;
   const [view, setView] = useState("loading");
   const [status, setStatus] = useState<ScanStatus>();
+  const [scanError, setScanError] = useState<string | null>(null);
   const [restrictedPaths, setRestrictedPaths] = useState<Array<RestrictedPath>>(
     []
   );
@@ -138,15 +189,42 @@ const Scanning = () => {
     useState<PrivacyAccessStatus | null>(null);
 
   const [deleteList, setDeleteList] = useState<Array<D3HierarchyDiskItem>>([]);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const deleteMap = useRef<Map<string, boolean>>(new Map());
   const cancelDeleteRef = useRef(false);
   const updateScannedAt = (value: number | null) => {
     scannedAtRef.current = value;
     setScannedAt(value);
   };
+  const updateRouteFocusedPath = (directory: D3HierarchyDiskItem) => {
+    const focusedPath = normalizeNodePath(directory);
+    if (normalizePathText(routeState.focusedPath || "") === focusedPath) {
+      return;
+    }
+
+    navigate("/disk", {
+      replace: true,
+      state: {
+        ...routeState,
+        disk,
+        used,
+        forceScan,
+        focusedPath,
+      },
+    });
+  };
+  const setFocusedDirectoryNode = (
+    directory: D3HierarchyDiskItem,
+    updateRoute = true
+  ) => {
+    setFocusedDirectory(directory);
+    if (updateRoute) {
+      updateRouteFocusedPath(directory);
+    }
+  };
   const focusDirectory = (directory: D3HierarchyDiskItem) => {
     clearPreviewDirectory();
-    setFocusedDirectory(directory);
+    setFocusedDirectoryNode(directory);
     d3Chart.current?.focusDirectory(directory);
   };
   const hoverListItem = (item: D3HierarchyDiskItem) => {
@@ -159,6 +237,82 @@ const Scanning = () => {
   const clearHoveredItem = () => {
     setHoveredItem(null);
     d3Chart.current?.setHoveredNode(null);
+  };
+  const syncDeleteMap = (nodes: Array<D3HierarchyDiskItem>) => {
+    deleteMap.current = new Map(nodes.map((node) => [node.data.id, true]));
+  };
+  const getCollectorBlockReason = (
+    node: D3HierarchyDiskItem,
+    selected = deleteList
+  ) => {
+    if (deleteState.isDeleting) {
+      return "Deletion in progress";
+    }
+    if (isSyntheticNode(node)) {
+      return "Smaller Items is a summary, not a single path";
+    }
+    if (node.data.restricted) {
+      return "Restricted items cannot be collected";
+    }
+    if (!node.parent) {
+      return "Top-level item cannot be collected";
+    }
+    if (selected.some((entry) => entry.data.id === node.data.id)) {
+      return "Already in Collector";
+    }
+    if (selected.some((entry) => isAncestorNode(entry, node))) {
+      return "Parent in Collector";
+    }
+
+    return null;
+  };
+  const addNodeToCollector = (node: D3HierarchyDiskItem) => {
+    if (getCollectorBlockReason(node)) {
+      return;
+    }
+
+    cancelDeleteRef.current = false;
+    setDeleteState(emptyDeleteState);
+    setDeleteList((current) => {
+      if (getCollectorBlockReason(node, current)) {
+        return current;
+      }
+
+      const next = current.filter((entry) => !isAncestorNode(node, entry));
+      next.push(node);
+      syncDeleteMap(next);
+      return next;
+    });
+  };
+  const showNodeInFolder = (node: D3HierarchyDiskItem) => {
+    if (isSyntheticNode(node)) {
+      return;
+    }
+    invoke("show_in_folder", { path: normalizeNodePath(node) }).catch(
+      console.error
+    );
+  };
+  const openNodeInTerminal = (node: D3HierarchyDiskItem) => {
+    if (isSyntheticNode(node)) {
+      return;
+    }
+    invoke("open_terminal", { path: normalizeNodePath(node) }).catch(
+      console.error
+    );
+  };
+  const openNodeContextMenu = (
+    event: NodeContextMenuEvent,
+    node: D3HierarchyDiskItem
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setHoveredItem({ ...node.data });
+    d3Chart.current?.setHoveredNode(node);
+    setContextMenu({
+      x: event.clientX + 8,
+      y: event.clientY + 8,
+      node,
+    });
   };
   const addRestrictedPath = (restrictedPath: RestrictedPath) => {
     const normalizedPath = restrictedPath.path.replace(/\\/g, "/");
@@ -205,6 +359,7 @@ const Scanning = () => {
 
       restrictedPathsRef.current = [];
       setRestrictedPaths([]);
+      setScanError(null);
       updateScannedAt(null);
       scanStartedAt.current = performance.now();
       timer = window.setInterval(() => {
@@ -221,6 +376,14 @@ const Scanning = () => {
       unlisteners.push(
         listen("scan_restricted_path", (event: any) => {
           addRestrictedPath(event.payload as RestrictedPath);
+        })
+      );
+
+      unlisteners.push(
+        listen("scan_failed", (event: any) => {
+          const failure = event.payload as ScanFailure;
+          setScanError(failure.message);
+          setElapsedSeconds((performance.now() - scanStartedAt.current) / 1000);
         })
       );
 
@@ -263,7 +426,11 @@ const Scanning = () => {
       );
 
       scanStarted = true;
-      invoke("start_scanning", { path: disk, ratio: "0.001" });
+      invoke("start_scanning", { path: disk, ratio: "0.001" }).catch(
+        (error) => {
+          setScanError(String(error));
+        }
+      );
     };
 
     startScan().catch(console.error);
@@ -279,6 +446,32 @@ const Scanning = () => {
     };
   }, [disk, forceScan, used]);
 
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+
+    const closeContextMenu = () => setContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setContextMenu(null);
+      }
+    };
+
+    window.addEventListener("click", closeContextMenu);
+    window.addEventListener("blur", closeContextMenu);
+    window.addEventListener("resize", closeContextMenu);
+    window.addEventListener("scroll", closeContextMenu, true);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("click", closeContextMenu);
+      window.removeEventListener("blur", closeContextMenu);
+      window.removeEventListener("resize", closeContextMenu);
+      window.removeEventListener("scroll", closeContextMenu, true);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [contextMenu]);
+
   // Appena ho i dati
   useEffect(() => {
     if (view == "disk") {
@@ -286,7 +479,7 @@ const Scanning = () => {
       d3.select(svgRef.current).selectAll("*").remove();
 
       const rootDir = baseDataD3Hierarchy.current!;
-      setFocusedDirectory(rootDir);
+      setFocusedDirectoryNode(rootDir, false);
 
       const base = baseDataD3Hierarchy.current!; //getViewNode(baseData.current!);
 
@@ -301,14 +494,48 @@ const Scanning = () => {
           setHoveredItem({ ...p.data });
           setPreviewDirectory(isDirectoryNode(p) ? p : null);
         },
+        arcContextMenu: (event, p) => {
+          openNodeContextMenu(event, p);
+          setPreviewDirectory(isDirectoryNode(p) ? p : null);
+        },
+        hoverCleared: () => {
+          clearHoveredItem();
+          clearPreviewDirectory();
+        },
         arcClicked: (_, p) => {
           clearPreviewDirectory();
-          setFocusedDirectory(p);
+          setFocusedDirectoryNode(p);
           return p;
         },
       });
     }
   }, [view]);
+
+  useEffect(() => {
+    if (view !== "disk" || !requestedFocusedPath || !baseDataD3Hierarchy.current) {
+      return;
+    }
+
+    const requestedNode = findNodeByFullPath(
+      baseDataD3Hierarchy.current,
+      requestedFocusedPath
+    );
+
+    if (!requestedNode || !isDirectoryNode(requestedNode)) {
+      return;
+    }
+
+    if (
+      focusedDirectory &&
+      normalizeNodePath(focusedDirectory) === normalizePathText(requestedFocusedPath)
+    ) {
+      return;
+    }
+
+    clearPreviewDirectory();
+    setFocusedDirectoryNode(requestedNode, false);
+    d3Chart.current?.focusDirectory(requestedNode);
+  }, [requestedFocusedPath, view, focusedDirectory?.data.id]);
   const expectedTotal = typeof used === "number" && used > 0 ? used : 0;
   const progressPercent =
     status && expectedTotal > 0
@@ -328,6 +555,31 @@ const Scanning = () => {
     deleteState.total > 0
       ? Math.min((deleteState.current / deleteState.total) * 100, 100)
       : 0;
+  const contextNode = contextMenu?.node || null;
+  const contextNodeName = contextNode?.data.name || "";
+  const contextNodeIsSynthetic = isSyntheticNode(contextNode);
+  const contextNodeCanExpand =
+    isDirectoryNode(contextNode) && !contextNodeIsSynthetic;
+  const contextCollectBlockReason = contextNode
+    ? getCollectorBlockReason(contextNode)
+    : null;
+  const contextCollectorLabel =
+    contextCollectBlockReason === "Already in Collector" ||
+    contextCollectBlockReason === "Parent in Collector"
+      ? contextCollectBlockReason
+      : `Move "${contextNodeName}" to Collector`;
+  const contextMenuLeft = contextMenu
+    ? Math.max(
+        8,
+        Math.min(contextMenu.x, window.innerWidth - CONTEXT_MENU_WIDTH - 8)
+      )
+    : 0;
+  const contextMenuTop = contextMenu
+    ? Math.max(
+        8,
+        Math.min(contextMenu.y, window.innerHeight - CONTEXT_MENU_HEIGHT - 8)
+      )
+    : 0;
   const refreshPrivacyStatus = () => {
     invoke<PrivacyAccessStatus>("get_privacy_access_status")
       .then(setPrivacyStatus)
@@ -466,8 +718,7 @@ const Scanning = () => {
 
     const failedIds = new Set(failures.map((failure) => failure.id));
     const survivingItems = selected.filter((node) => failedIds.has(node.data.id));
-    deleteMap.current.clear();
-    survivingItems.forEach((node) => deleteMap.current.set(node.data.id, true));
+    syncDeleteMap(survivingItems);
     setDeleteList(survivingItems);
     setDeleteState({
       isDeleting: false,
@@ -536,8 +787,14 @@ const Scanning = () => {
                 </div>
               </div>
             </div>
-            <div className="mt-3 text-center text-xs text-gray-500">
-              {status.errors > 0
+            <div
+              className={`mt-3 text-center text-xs ${
+                scanError ? "text-rose-300" : "text-gray-500"
+              }`}
+            >
+              {scanError
+                ? scanError
+                : status.errors > 0
                 ? `${status.errors.toLocaleString()} inaccessible items`
                 : "No access errors"}
             </div>
@@ -584,15 +841,7 @@ const Scanning = () => {
               if (!item) {
                 return;
               }
-              setDeleteList((val) => {
-                if (!val.find((e) => e.data.id === item.data.id)) {
-                  deleteMap.current.set(item.data.id, true);
-
-                  return [...val, item];
-                } else {
-                  return val;
-                }
-              });
+              addNodeToCollector(item);
             }}
           >
             <div
@@ -671,6 +920,10 @@ const Scanning = () => {
                           onHover={hoverListItem}
                           onHoverEnd={clearHoveredItem}
                           onOpenDirectory={focusDirectory}
+                          onContextMenu={(event, item) =>
+                            openNodeContextMenu(event, item)
+                          }
+                          isCollectDisabled={!!getCollectorBlockReason(c)}
                         ></FileLine>
                       ))}
 
@@ -685,7 +938,10 @@ const Scanning = () => {
                       ref={provided.innerRef}
                       {...provided.droppableProps}
                     >
-                      <div className="rounded-lg border	border-gray-500	border-dashed p-2 text-gray-500 text-center mb-0">
+                      <div
+                        data-testid="collector-drop-zone"
+                        className="rounded-lg border	border-gray-500	border-dashed p-2 text-gray-500 text-center mb-0"
+                      >
                         {deleteList.length == 0 && (
                           <>Drop files and folders here to collect</>
                         )}
@@ -702,7 +958,7 @@ const Scanning = () => {
                                 disabled={deleteState.isDeleting}
                                 onClick={() => {
                                   setDeleteList([]);
-                                  deleteMap.current.clear();
+                                  syncDeleteMap([]);
                                   cancelDeleteRef.current = false;
                                   setDeleteState(emptyDeleteState);
                                 }}
@@ -788,6 +1044,88 @@ const Scanning = () => {
           </DragDropContext>
         </div>
       )}
+      {contextMenu &&
+        contextNode &&
+        createPortal(
+          <div
+            role="menu"
+            data-testid="node-context-menu"
+            data-node-id={contextNode.data.id}
+            className="fixed z-[9999] w-[250px] overflow-hidden rounded-md border border-gray-600 py-1 text-left text-sm text-gray-100 shadow-2xl"
+            style={{
+              left: contextMenuLeft,
+              top: contextMenuTop,
+              backgroundColor: "#111827",
+            }}
+            onClick={(event) => event.stopPropagation()}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="context-menu-expand"
+              disabled={!contextNodeCanExpand}
+              className="block w-full truncate px-4 py-2 text-left font-semibold text-gray-100 hover:bg-gray-800 disabled:text-gray-500 disabled:hover:bg-transparent"
+              onClick={() => {
+                if (!contextNodeCanExpand) {
+                  return;
+                }
+                setContextMenu(null);
+                focusDirectory(contextNode);
+              }}
+            >
+              Expand "{contextNodeName}"
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="context-menu-show-in-finder"
+              disabled={contextNodeIsSynthetic}
+              className="block w-full px-4 py-2 text-left font-semibold text-gray-100 hover:bg-gray-800 disabled:text-gray-500 disabled:hover:bg-transparent"
+              onClick={() => {
+                setContextMenu(null);
+                showNodeInFolder(contextNode);
+              }}
+            >
+              Show in Finder
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="context-menu-open-terminal"
+              disabled={contextNodeIsSynthetic}
+              className="block w-full px-4 py-2 text-left font-semibold text-gray-100 hover:bg-gray-800 disabled:text-gray-500 disabled:hover:bg-transparent"
+              onClick={() => {
+                setContextMenu(null);
+                openNodeInTerminal(contextNode);
+              }}
+            >
+              Open in Terminal
+            </button>
+            <div className="my-1 border-t border-gray-700" />
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="context-menu-collect"
+              disabled={!!contextCollectBlockReason}
+              title={contextCollectBlockReason || undefined}
+              className="block w-full truncate px-4 py-2 text-left font-semibold text-rose-100 hover:bg-rose-950/60 disabled:text-gray-500 disabled:hover:bg-transparent"
+              onClick={() => {
+                if (contextCollectBlockReason) {
+                  return;
+                }
+                setContextMenu(null);
+                addNodeToCollector(contextNode);
+              }}
+            >
+              {contextCollectorLabel}
+            </button>
+          </div>,
+          document.body
+        )}
     </>
   );
 };
