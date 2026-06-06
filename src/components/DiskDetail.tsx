@@ -660,6 +660,17 @@ const Scanning = () => {
     for (const [index, node] of selected.entries()) {
       const nodePath = normalizeNodePath(node);
 
+      setDeleteState({
+        isDeleting: true,
+        isCountingDown: false,
+        countdown: null,
+        total: selected.length,
+        current: index + 1,
+        recoveredBytes,
+        failures: [...failures],
+      });
+      await wait(0);
+
       try {
         const outcome = await invoke<DeleteOutcome>("delete_permanently", {
           path: nodePath,

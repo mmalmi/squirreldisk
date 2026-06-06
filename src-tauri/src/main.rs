@@ -125,12 +125,14 @@ fn open_full_disk_access_settings() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn delete_permanently(path: String) -> Result<DeleteOutcome, String> {
+async fn delete_permanently(path: String) -> Result<DeleteOutcome, String> {
     if path.trim().is_empty() {
         return Err("Path is empty".to_string());
     }
 
-    delete_permanently_at_path(&PathBuf::from(path))
+    tauri::async_runtime::spawn_blocking(move || delete_permanently_at_path(&PathBuf::from(path)))
+        .await
+        .map_err(|error| format!("Failed to join deletion task: {error}"))?
 }
 
 fn delete_permanently_at_path(path: &Path) -> Result<DeleteOutcome, String> {
