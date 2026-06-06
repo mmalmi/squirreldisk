@@ -430,10 +430,17 @@ mod tests {
 
     #[test]
     fn deletion_protection_rejects_roots_and_major_system_dirs() {
-        assert!(deletion_protection_reason(Path::new("/")).is_some());
-        assert!(deletion_protection_reason(Path::new("/System")).is_some());
-        assert!(deletion_protection_reason(Path::new("/Users")).is_some());
-        assert!(deletion_protection_reason(Path::new("/tmp/squirreldisk-file")).is_none());
+        let temp_dir = std::env::temp_dir();
+        let root = temp_dir.ancestors().last().unwrap();
+
+        assert!(deletion_protection_reason(root).is_some());
+        assert!(deletion_protection_reason(&temp_dir.join("squirreldisk-file")).is_none());
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(deletion_protection_reason(Path::new("/System")).is_some());
+            assert!(deletion_protection_reason(Path::new("/Users")).is_some());
+        }
     }
 
     #[test]
